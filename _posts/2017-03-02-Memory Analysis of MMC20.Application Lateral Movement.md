@@ -19,7 +19,7 @@ Like most people one of the first things you likely gravitate to looking at firs
 <br><br>
 First being pslist (I've snipped most of the listing, honing in only on the ones that stood out to me). <br><br>
 PSList
-```shell.command
+```shell
 Offset(V)          Name                    PID   PPID   Thds     Hnds   Sess  Wow64 Start                          Exit
 ------------------ -------------------- ------ ------ ------ -------- ------ ------ ------------------------------ ------------------------------
 0xfffffa8032f54600 svchost.exe             584    464      9      359      0      0 2017-02-22 17:48:24 UTC+0000
@@ -30,7 +30,7 @@ Offset(V)          Name                    PID   PPID   Thds     Hnds   Sess  Wo
 0xfffffa80334fd060 calc.exe               2040   3216      3       70      0      0 2017-02-22 19:13:10 UTC+0000
 ```
 PSTree
-```shell.command
+```shell
 .. 0xfffffa8032f54600:svchost.exe                     584    464      9    359 2017-02-22 17:48:24 UTC+0000
 ... 0xfffffa80332b0350:WmiPrvSE.exe                  1984    584      0 ------ 2017-02-22 17:48:27 UTC+0000
 ... 0xfffffa80332ae060:WmiPrvSE.exe                  1480    584     10    202 2017-02-22 17:48:28 UTC+0000
@@ -39,7 +39,7 @@ PSTree
 .... 0xfffffa80334fd060:calc.exe                     2040   3216      3     70 2017-02-22 19:13:10 UTC+0000
 ```
 PSScan
-```shell.command
+```shell
 Offset(P)          Name                PID   PPID PDB                Time created                   Time exited
 ------------------ ---------------- ------ ------ ------------------ ------------------------------ ------------------------------
 0x00000000fd19e880 mmc.exe            3216    584 0x000000000db96000 2017-02-22 19:12:27 UTC+0000   2017-02-22 19:31:51 UTC+0000
@@ -51,7 +51,7 @@ Offset(P)          Name                PID   PPID PDB                Time create
 0x00000000ff59aa50 WmiPrvSE.exe       1800    584 0x00000001262f4000 2017-02-22 19:25:39 UTC+0000   2017-02-22 19:31:52 UTC+0000
 ```
 PSXView
-```shell.command
+```shell
 Offset(P)          Name                    PID pslist psscan thrdproc pspcid csrss session deskthrd ExitTime
 ------------------ -------------------- ------ ------ ------ -------- ------ ----- ------- -------- --------
 0x00000000fded2680 svchost.exe             584 True   True   True     True   True  True    False
@@ -67,7 +67,7 @@ One of the first things I noticed was all the processes with svchost as their Pa
 You'll likely also notice that mmc has a process running under it.  This too seems odd to me, combined with the fact that svchost has a handful on non-service like processes running under it (excluding the WmiPrvSE and dllhost which are inherent to this type of activity).<br>
 
 The next logical step might be to look at the command-line arguments used.  For this we turn to cmdline, which shows us that svchost service launched a DCOM response to an object activation request.
-```shell.command
+```shell
 ************************************************************************
 svchost.exe pid:    584
 Command line : C:\Windows\system32\svchost.exe -k DcomLaunch
@@ -91,7 +91,7 @@ The next step might be to look at the loaded dlls but from the processes above b
 SID Reviews
 ----------------------------------------
 From this point I am still trying to gather more information on the processes I am potentially concerned with, so I ran GetSIDs.  You'll likely also notice that a few processes appear to belong to the user 'administrator'.  You'll also notice that many of these processes aren't running interactively or via physical console but via NTLM Authentication.  This gives us more of an understanding who and how these suspicious processes were launched.
-```shell.command
+```shell
 svchost.exe (584): S-1-5-18 (Local System)
 svchost.exe (584): S-1-16-16384 (System Mandatory Level)
 svchost.exe (584): S-1-1-0 (Everyone)
@@ -204,7 +204,7 @@ Network Review
 ----------------------------------------
 As mentioned above, I waited a little while (40 odd minutes) before capturing memory since most situations don't automatically have evil executed and then automatically have memory acquired.<br>
 Next I looked at the network connections and listening processes still resident in memory.  Running netscan we see the following:
-```shell.command
+```shell
 Offset(P)          Proto    Local Address                  Foreign Address      State            Pid      Owner          Created
 0x13d760a20        TCPv4    0.0.0.0:49230                  0.0.0.0:0            LISTENING        3216     mmc.exe
 0x13d760a20        TCPv6    :::49230                       :::0                 LISTENING        3216     mmc.exe
@@ -213,7 +213,7 @@ Offset(P)          Proto    Local Address                  Foreign Address      
 Services Review
 ----------------------------------------
 In this case, I don't have a great need to look at the services but regardless SvcScan shows the following regarding svcscan's DcomLaunch:
-```shell.command
+```shell
 Shows svcscan with dcom started
 Offset: 0x98f220
 Order: 234
@@ -229,7 +229,7 @@ Binary Path: C:\Windows\system32\svchost.exe -k DcomLaunch
 Sessions Review
 ----------------------------------------
 Now that we know a little more about the processes (who and how) we can dig a little deeper to help solidify our findings.  Looking at the logon session space is a great place to understand a little more about what you are dealing with.  The session information of note is listed below but one thing that stands out to me is our processes of interest are all running under Session ID 0 (understandable in this case) and the kernel driver loaded is TSDDD.dll, not cdd.dll, rdpdd.dll or something similar.  [TSDDD.dll](https://msdn.microsoft.com/en-us/library/aa940056(v=winembedded.5).aspx 'MSDN - TSDDD.dll info') is the terminal services VGA display driver and unlike the Canonical Display Driver (cdd.dll) it is meant for headless rendering.  It is also used when the video driver is undetermined for console disconnects and reconnects, so we can infer that mmc and calc was definitely launched/leveraged in some non-GUI manner.
-```shell.command
+```shell
 **************************************************
 Session(V): fffff88004686000 ID: 0 Processes: 51
 PagedPoolStart: fffff900c0000000 PagedPoolEnd fffff920bfffffff
@@ -249,7 +249,7 @@ Atom Table Review
 ----------------------------------------
 So now we know a decent bit about this pure evil activity of calc.exe but we still don't know explicitly how this execution happened.  There are a handful of ways you might be able to pull more on that thread, such as reviewing the strings of the processes noted or in free memory or perhaps in the pagefile but sometimes you can get some quick wins by reviewing the atom table, which usually contain some juicy strings being used by functions and they usually remain resident in the table even after whatever API function pushed them onto the table.  In this case I noted the following atoms:
  *The cmds atomscan and atoms different parsing techniques gave me the same finding in respect to strings shown below, so I won't bother to show both outputs.*
- ```shell.command
+ ```shell
  Offset(V)  Session     WindowStation                  Atom  RefCount    HIndex     Pinned   Name
 ------------------ ---------- ------------------ ------------------ ---------- ---------- ---------- ----
 [snip]
@@ -274,7 +274,7 @@ So why do I highlight those?  Because DCOM objects use the [IDataObject Interfac
 Strings Review
 ----------------------------------------
 Okay, so now we know a little more regarding the DCOM use but we haven't nailed down exactly how it was processed.  A review of strings may help here.  Reviewing the strings output (skipping a ton of the other process strings and free memory strings), we note the following references that clearly tell the tale a little more (note the MMC20.Application specifically).
-```shell.command
+```shell
 [snip]
 421901668 [FREE MEMORY:-1] [01;31MMCCtrl class
 421902036 [FREE MEMORY:-1] @%SystemRoot%\system32\[01;31mmcbase.dll,-130
