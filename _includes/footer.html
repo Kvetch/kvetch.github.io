@@ -1,0 +1,33 @@
+<footer class="footer">
+  <div id="gotop">^</div>
+  <br>
+  {% if page.comments %}
+  <div class="post-author text-center">
+  	<img src="{{site.url}}/images/{{ site.author.picture }}" alt="{{ site.author.name }}'s photo" class="post-avatar" style="width:150px;height:150px;"/>
+  	<h3>
+  		By <span itemprop="name" class="fn"><a href="/about" title="About {{ site.author.name }}" itemprop="url">{{ site.author.name }}</a></span>
+  	</h3>
+  	<p>{{ site.author.description }}</p>
+  </div>
+  {% include disqus_comments.html %}
+  {% endif %}
+  {% if site.disqus_shortname and page.comments == true %}
+      <div id="disqus_thread"></div><!-- /#disqus_thread -->
+  {% endif %}
+  <br>
+	@2017 Nick Baronian - Kvetch
+  <script>
+    var _gaq = _gaq || [];
+    var pluginUrl =
+   '//www.google-analytics.com/plugins/ga/inpage_linkid.js';
+    _gaq.push(['_require', 'inpage_linkid', pluginUrl]);
+    _gaq.push(['_setAccount', '{{ site.google_analytics }}']);
+    _gaq.push(['_trackPageview']);
+
+    (function() {
+      var ga = document.createElement('script'); ga.type = 'text/javascript'; ga.async = true;
+      ga.src = ('https:' == document.location.protocol ? 'https://' : 'http://') + 'stats.g.doubleclick.net/dc.js';
+      var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(ga, s);
+    })();
+  </script>
+</footer>

@@ -1,0 +1,28 @@
+# Site settings
+title: The Negative.Zone
+motto: The Crossroads of Infinity
+email: kvetch [@t] thenegative [d ot] zone
+description: > # this means to ignore newlines until "baseurl:"
+  The Crossroads of Infinity
+baseurl: "" # the subpath of your site, e.g. /blog/
+url: "http://thenegative.zone" # the base hostname & protocol for your site
+twitter_username: NBaronian
+github_username:  Kvetch
+disqus_shortname: thenegative-zone
+# Build settings
+markdown: kramdown
+# Owner/author information
+author:
+  name:           Kvetch
+  picture:        ShoePhone.gif
+  email:          kvetch [@t] thenegative [d ot] zone
+  description:    One more guy occasionally blogging about stuff, usually DFIR focused.
+  # Social networking links used in footer. Update and remove as you like.
+  twitter:        NBaronian
+  github:         Kvetch
+  # For Google Authorship https://plus.google.com/authorship
+  google_plus:    "https://plus.google.com/u/0/106777085719907313295"
+  
+# Analytics and webmaster tools stuff goes here
+google_analytics: UA-91327667-1
+google_verify:

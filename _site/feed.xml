@@ -1,0 +1,1216 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
+  <channel>
+    <title>The Negative.Zone</title>
+    <description>The Crossroads of Infinity
+</description>
+    <link>http://localhost:4000/</link>
+    <atom:link href="http://localhost:4000/feed.xml" rel="self" type="application/rss+xml"/>
+    <pubDate>Tue, 16 May 2017 00:21:35 -0400</pubDate>
+    <lastBuildDate>Tue, 16 May 2017 00:21:35 -0400</lastBuildDate>
+    <generator>Jekyll v3.4.0</generator>
+    
+      <item>
+        <title>Analyzing Endpoints With ELK</title>
+        <description>&lt;p&gt;In this post I will cover my analysis setup in regards to how I have mine configured to capture and consume Sysmon(Windows Logs), Packetbeat, Bro and Procmon.  Everyone loves the SysInternals Suite.  It comes with an amazing array of analysis tools that have all held the test of time.  As with most folks who using the tool suite, &lt;a href=&quot;https://technet.microsoft.com/en-us/sysinternals/processmonitor.aspx&quot; title=&quot;Procmon&quot; target=&quot;_blank&quot;&gt;Process Monitor&lt;/a&gt; is likely in their top 3 favorites.  Those that use Procmon regularly likely have their favorite filters and perhaps tools.  Many folks use tools like &lt;a href=&quot;https://github.com/Rurik/Noriben&quot; target=&quot;_blank&quot;&gt;Noriben&lt;/a&gt; to get quick hits when running malicious binaries.  Noriben is an amazing script that allows you to run Noriben, run your malicious executable and then stop Noriben and review the parsed Procmon output.  As always, there’s more than one way to skin a &lt;a href=&quot;http://www.worldwidewords.org/qa/qa-mor1.htm&quot; target=&quot;_blank&quot;&gt;cat&lt;/a&gt; and because I like using ELK for filtering out some of my analysis, I thought I would take a crack at parsing Procmon with Logstash.  Everyone has different setups, so I won’t touch on how you execute Procmon (vmrun), filters you may want to keep local to Procmon or where you save the output, although I will mention saving to a location like a VM shared folder so Logstash or Beats can read is likely ideal.&lt;/p&gt;
+
+&lt;p&gt;First things first, my analysis VMs have Sysmon installed, as well as &lt;a href=&quot;https://www.elastic.co/downloads/beats/winlogbeat&quot; target=&quot;_blank&quot;&gt;Winlogbeat&lt;/a&gt; and &lt;a href=&quot;https://www.elastic.co/downloads/beats/packetbeat&quot; target=&quot;_blank&quot;&gt;Packetbeat&lt;/a&gt;.  Even though I am running Packetbeat, I also run Bro for some additional traffic details.  I won’t cover how to install these because it is pretty dead simple.  I will share my ELK configuration files though.  As for Procmon, it offers multiple output formats, PML, XML and CSV.  Knowing that XML or CSV would likely be the best suited for an ELK setup, I tested playing with both and while XML is doable, it seems to present a lot of unnecessary overhead and Logstash parsing because the XML output is largely filled with data we don’t necessarily need.  For this post I will highlight how to use CSV output.  If you still want to play with parsing the XML output from Procmon feel free to utilize/tweak the following &lt;a href=&quot;https://gist.github.com/Kvetch/35ecafd9f0519b261da0dfe78376079e&quot; target=&quot;_blank&quot;&gt;gist&lt;/a&gt;.  I find the XML parsing to not be overly reliable, so to me it I landed on leaning on the CSV output.&lt;/p&gt;
+
+&lt;p&gt;Before I get into how Procmon, I will cover the easier configurations.  Getting Logstash to process incoming Beats data is &lt;a href=&quot;https://gist.github.com/Kvetch/f155b71475ae52d1f10d7ef207315ab6&quot; target=&quot;_blank&quot;&gt;simple&lt;/a&gt;.  Just tell Logstash to accept input from the Beats service kicking data out to port 5044 and then send it to Elastic on 9200 and voilà.  Packetbeats will send data directly to Logstash and if you configured Winlogbeat to consume Sysmon logs, you should be good to go.&lt;/p&gt;
+&lt;div class=&quot;language-shell highlighter-rouge&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;input &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+  beats &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+    port &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; 5044
+  &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+&lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+output &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+  elasticsearch &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+    hosts &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;&quot;http://localhost:9200&quot;&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;]&lt;/span&gt;
+    index &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;s2&quot;&gt;&quot;%{[@metadata][beat]}-%{+YYYY.MM.dd}&quot;&lt;/span&gt;
+    document_type &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;s2&quot;&gt;&quot;%{[@metadata][type]}&quot;&lt;/span&gt;
+  &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+&lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;
+&lt;/div&gt;
+
+&lt;p&gt;Capturing full pcaps is another element I won’t cover here but usually when I am performing analysis in a VM, I capture traffic on my Host and then run Bro against the pcap.  I know there are a handful of decent tutorials covering how to parse Bro logs into ELK but since Bro can automatically parse into JSON, I find this method the cleanest and easiest.  To enable JSON output simply add the following to be default or execute bro manually to parse out to JSON like so&lt;/p&gt;
+&lt;div class=&quot;language-shell highlighter-rouge&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;Under bro/share/bro/site/local.bro add
+  @tuning/json-logs
+run
+  broctl config
+  broctl install
+Then just run Bro against a pcap
+  bro -r some.pcap
+or &lt;span class=&quot;k&quot;&gt;if &lt;/span&gt;you want to just tell Bro to parse to JSON when you need it run the following:
+  bro -r some.pcap /opt/local/share/bro/policy/tuning/json-logs.bro
+&lt;/code&gt;&lt;/pre&gt;
+&lt;/div&gt;
+&lt;p&gt;From here you can tweak your output into Elastic however you see fit but I’ve found the following &lt;a href=&quot;https://gist.github.com/Kvetch/6ddf203e2fd462e8d6a62f64a80326dd&quot; target=&quot;_blank&quot;&gt;config&lt;/a&gt; works nicely for me.  I will note, I am using the de_dot plugin to assist here.  In short, you would capture your pcap and tell Bro to parse the pcap into a JSON log and Logstash will pick it up using something like the following:&lt;/p&gt;
+&lt;div class=&quot;language-shell highlighter-rouge&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;input &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+  file &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+  		&lt;span class=&quot;nb&quot;&gt;type&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;s2&quot;&gt;&quot;bro_logs&quot;&lt;/span&gt;
+        path &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;s2&quot;&gt;&quot;/Analysis/Pcaps/*.log&quot;&lt;/span&gt;
+        start_position &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; beginning
+        codec &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; json
+    	sincedb_path &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;s2&quot;&gt;&quot;/var/log/.bro_sincedb&quot;&lt;/span&gt;
+       &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+&lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+
+filter &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+  date &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+    match &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt; &lt;span class=&quot;s2&quot;&gt;&quot;ts&quot;&lt;/span&gt;, &lt;span class=&quot;s2&quot;&gt;&quot;UNIX&quot;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;]&lt;/span&gt;
+    target &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;s2&quot;&gt;&quot;@timestamp&quot;&lt;/span&gt;
+    remove_field &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt; &lt;span class=&quot;s2&quot;&gt;&quot;ts&quot;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;]&lt;/span&gt;
+  &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+  &lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt;log_path] &lt;span class=&quot;o&quot;&gt;==&lt;/span&gt; &lt;span class=&quot;s2&quot;&gt;&quot;weird&quot;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+    de_dot &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+      fields &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt;
+        &lt;span class=&quot;s2&quot;&gt;&quot;id.orig_p&quot;&lt;/span&gt;,
+        &lt;span class=&quot;s2&quot;&gt;&quot;id.resp_p&quot;&lt;/span&gt;
+      &lt;span class=&quot;o&quot;&gt;]&lt;/span&gt;
+    &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+  &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+  &lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt;log_path] &lt;span class=&quot;o&quot;&gt;==&lt;/span&gt; &lt;span class=&quot;s2&quot;&gt;&quot;software&quot;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+    de_dot &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+      fields &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt;
+        &lt;span class=&quot;s2&quot;&gt;&quot;version.major&quot;&lt;/span&gt;,
+        &lt;span class=&quot;s2&quot;&gt;&quot;version.minor&quot;&lt;/span&gt;,
+        &lt;span class=&quot;s2&quot;&gt;&quot;version.minor2&quot;&lt;/span&gt;,
+        &lt;span class=&quot;s2&quot;&gt;&quot;version.minor3&quot;&lt;/span&gt;,
+        &lt;span class=&quot;s2&quot;&gt;&quot;version.addl&quot;&lt;/span&gt;
+      &lt;span class=&quot;o&quot;&gt;]&lt;/span&gt;
+    &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+  &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+  &lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt;log_path] &lt;span class=&quot;o&quot;&gt;==&lt;/span&gt; &lt;span class=&quot;s2&quot;&gt;&quot;x509&quot;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+    de_dot &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+      fields &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt;
+        &lt;span class=&quot;s2&quot;&gt;&quot;certificate.version&quot;&lt;/span&gt;,
+        &lt;span class=&quot;s2&quot;&gt;&quot;certificate.serial&quot;&lt;/span&gt;,
+        &lt;span class=&quot;s2&quot;&gt;&quot;certificate.subject&quot;&lt;/span&gt;,
+        &lt;span class=&quot;s2&quot;&gt;&quot;certificate.issuer&quot;&lt;/span&gt;,
+        &lt;span class=&quot;s2&quot;&gt;&quot;certificate.exponent&quot;&lt;/span&gt;,
+        &lt;span class=&quot;s2&quot;&gt;&quot;certificate.curve&quot;&lt;/span&gt;,
+        &lt;span class=&quot;s2&quot;&gt;&quot;sans.dns&quot;&lt;/span&gt;,
+        &lt;span class=&quot;s2&quot;&gt;&quot;basic_constraints.ca&quot;&lt;/span&gt;
+      &lt;span class=&quot;o&quot;&gt;]&lt;/span&gt;
+    &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+  &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+  &lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt;log_path] &lt;span class=&quot;o&quot;&gt;==&lt;/span&gt; &lt;span class=&quot;s2&quot;&gt;&quot;intel&quot;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+    de_dot &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+      fields &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt;
+        &lt;span class=&quot;s2&quot;&gt;&quot;seen.indicator&quot;&lt;/span&gt;,
+        &lt;span class=&quot;s2&quot;&gt;&quot;seen.where&quot;&lt;/span&gt;,
+        &lt;span class=&quot;s2&quot;&gt;&quot;seen.node&quot;&lt;/span&gt;
+      &lt;span class=&quot;o&quot;&gt;]&lt;/span&gt;
+    &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+  &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+  mutate &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+    rename &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;&quot;id.orig_p&quot;&lt;/span&gt;, &lt;span class=&quot;s2&quot;&gt;&quot;src_port&quot;&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;]&lt;/span&gt;
+    rename &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;&quot;id.resp_p&quot;&lt;/span&gt;, &lt;span class=&quot;s2&quot;&gt;&quot;dst_port&quot;&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;]&lt;/span&gt;
+    rename &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;&quot;id.orig_h&quot;&lt;/span&gt;, &lt;span class=&quot;s2&quot;&gt;&quot;src_ip&quot;&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;]&lt;/span&gt;
+    rename &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;&quot;id.resp_h&quot;&lt;/span&gt;, &lt;span class=&quot;s2&quot;&gt;&quot;dst_ip&quot;&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;]&lt;/span&gt;
+  &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+&lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+
+
+output &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+  elasticsearch &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+    hosts &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;s2&quot;&gt;&quot;localhost&quot;&lt;/span&gt;
+    index &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;s2&quot;&gt;&quot;bro&quot;&lt;/span&gt;
+    document_type &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;s2&quot;&gt;&quot;Bro&quot;&lt;/span&gt;
+  &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+&lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;
+&lt;/div&gt;
+&lt;p&gt;Since those inputs are in JSON format there isn’t much to them besides tweaking to your liking.  Dealing with Procmon’s output takes a hair more tweaking but not much.  So let’s break down the config into chunks.  Starting with the Input, we need to tell Logstash to look for the Procmon output file csv.&lt;/p&gt;
+&lt;div class=&quot;language-shell highlighter-rouge&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;input &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+  file &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+    path &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;s2&quot;&gt;&quot;/SomeDir/LogFile.CSV&quot;&lt;/span&gt;
+    start_position &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;s2&quot;&gt;&quot;beginning&quot;&lt;/span&gt;
+    sincedb_path &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;s2&quot;&gt;&quot;/dev/null&quot;&lt;/span&gt;
+  &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+&lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;
+&lt;/div&gt;
+&lt;p&gt;Next we need to set the CSV filter.  This part is completely configurable based on your liking.  Procmon produces its CSV columns based on what the GUI window is displaying column wise and dependent on what outputs you are viewing.  For example, I have my Procmon configured to show the following and in this order.  You would adjust this based on what you find useful.&lt;/p&gt;
+&lt;div class=&quot;language-shell highlighter-rouge&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;filter &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+  csv &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+    separator &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;s2&quot;&gt;&quot;,&quot;&lt;/span&gt;
+    &lt;span class=&quot;c&quot;&gt;############ CHANGE ###################&lt;/span&gt;
+    columns &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;&quot;Time of Day&quot;&lt;/span&gt;,&lt;span class=&quot;s2&quot;&gt;&quot;Process Name&quot;&lt;/span&gt;,&lt;span class=&quot;s2&quot;&gt;&quot;PID&quot;&lt;/span&gt;,&lt;span class=&quot;s2&quot;&gt;&quot;Operation&quot;&lt;/span&gt;,&lt;span class=&quot;s2&quot;&gt;&quot;Path&quot;&lt;/span&gt;,&lt;span class=&quot;s2&quot;&gt;&quot;Result&quot;&lt;/span&gt;,&lt;span class=&quot;s2&quot;&gt;&quot;Detail&quot;&lt;/span&gt;,&lt;span class=&quot;s2&quot;&gt;&quot;Event Class&quot;&lt;/span&gt;,&lt;span class=&quot;s2&quot;&gt;&quot;Sequence&quot;&lt;/span&gt;,&lt;span class=&quot;s2&quot;&gt;&quot;Image Path&quot;&lt;/span&gt;,&lt;span class=&quot;s2&quot;&gt;&quot;Company&quot;&lt;/span&gt;,&lt;span class=&quot;s2&quot;&gt;&quot;Description&quot;&lt;/span&gt;,&lt;span class=&quot;s2&quot;&gt;&quot;Version&quot;&lt;/span&gt;,&lt;span class=&quot;s2&quot;&gt;&quot;User&quot;&lt;/span&gt;,&lt;span class=&quot;s2&quot;&gt;&quot;Session&quot;&lt;/span&gt;,&lt;span class=&quot;s2&quot;&gt;&quot;Command Line&quot;&lt;/span&gt;,&lt;span class=&quot;s2&quot;&gt;&quot;TID&quot;&lt;/span&gt;,&lt;span class=&quot;s2&quot;&gt;&quot;Virtualized&quot;&lt;/span&gt;,&lt;span class=&quot;s2&quot;&gt;&quot;Integrity&quot;&lt;/span&gt;,&lt;span class=&quot;s2&quot;&gt;&quot;Category&quot;&lt;/span&gt;,&lt;span class=&quot;s2&quot;&gt;&quot;Parent PID&quot;&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;]&lt;/span&gt;
+    &lt;span class=&quot;c&quot;&gt;############## ME ####################&lt;/span&gt;
+  &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;
+&lt;/div&gt;
+&lt;p&gt;Next, for good measure we need to convert a few field to their appropriate type.  I also recommend removing the message field to remove unnecessary clutter.&lt;/p&gt;
+&lt;div class=&quot;language-shell highlighter-rouge&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;  mutate &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+    convert &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+      &lt;span class=&quot;s2&quot;&gt;&quot;PID&quot;&lt;/span&gt;       &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;s2&quot;&gt;&quot;integer&quot;&lt;/span&gt;
+      &lt;span class=&quot;s2&quot;&gt;&quot;TID&quot;&lt;/span&gt;  &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;s2&quot;&gt;&quot;integer&quot;&lt;/span&gt;
+      &lt;span class=&quot;s2&quot;&gt;&quot;Parent PID&quot;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;s2&quot;&gt;&quot;integer&quot;&lt;/span&gt;
+      &lt;span class=&quot;s2&quot;&gt;&quot;Virtualized&quot;&lt;/span&gt;  &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;s2&quot;&gt;&quot;boolean&quot;&lt;/span&gt;
+      &lt;span class=&quot;s2&quot;&gt;&quot;Session&quot;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;s2&quot;&gt;&quot;integer&quot;&lt;/span&gt;
+      &lt;span class=&quot;s2&quot;&gt;&quot;Sequence&quot;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;s2&quot;&gt;&quot;integer&quot;&lt;/span&gt;
+      &lt;span class=&quot;s2&quot;&gt;&quot;Duration&quot;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;s2&quot;&gt;&quot;float&quot;&lt;/span&gt;
+    &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+    remove_field &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;s1&quot;&gt;'message'&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;]&lt;/span&gt;
+  &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;    
+&lt;/code&gt;&lt;/pre&gt;
+&lt;/div&gt;
+&lt;p&gt;Next thing we need to do is get Procmon’s multiple timestamps to work with Elastic’s &lt;a href=&quot;http://www.joda.org/joda-time/apidocs/org/joda/time/format/ISODateTimeFormat.html#dateOptionalTimeParser--&quot; target=&quot;_blank&quot;&gt;Joda&lt;/a&gt; millisecond timestamps.  So we look for the string ‘PM’ in the ‘Time of Day’ field, we remove the last 7 digits to make it work within millisecond time.  Then we take the ‘Date &amp;amp; Time’ field and we split it using spaces as the delimiter.  Now we add a new field, we call Time and grab the first element from the split and the newly trimmed ‘Time of Day’ and add the string ‘PM’.  We then do the same for AM.  Lastly we tell Logstash how it should interpret the Time field and we then set that to the @timestamp field.&lt;/p&gt;
+&lt;div class=&quot;language-shell highlighter-rouge&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;  &lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;s2&quot;&gt;&quot;PM&quot;&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;in&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt;Time of Day]
+  &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+    mutate &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+      gsub &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;&quot;Time of Day&quot;&lt;/span&gt;, &lt;span class=&quot;s2&quot;&gt;&quot;.{7}$&quot;&lt;/span&gt;, &lt;span class=&quot;s2&quot;&gt;&quot;&quot;&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;]&lt;/span&gt;
+      split &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;&quot;Date &amp;amp; Time&quot;&lt;/span&gt;, &lt;span class=&quot;s2&quot;&gt;&quot; &quot;&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;]&lt;/span&gt;
+      add_field &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;&quot;Time&quot;&lt;/span&gt;, &lt;span class=&quot;s2&quot;&gt;&quot;%{[Date &amp;amp; Time][0]} %{[Time of Day]} PM&quot;&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;]&lt;/span&gt;
+    &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+  &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+  &lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;s2&quot;&gt;&quot;AM&quot;&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;in&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt;Time of Day]
+  &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+    mutate &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+      gsub &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;&quot;Time of Day&quot;&lt;/span&gt;, &lt;span class=&quot;s2&quot;&gt;&quot;.{7}$&quot;&lt;/span&gt;, &lt;span class=&quot;s2&quot;&gt;&quot;&quot;&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;]&lt;/span&gt;
+      split &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;&quot;Date &amp;amp; Time&quot;&lt;/span&gt;, &lt;span class=&quot;s2&quot;&gt;&quot; &quot;&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;]&lt;/span&gt;
+      add_field &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;&quot;Time&quot;&lt;/span&gt;, &lt;span class=&quot;s2&quot;&gt;&quot;%{[Date &amp;amp; Time][0]} %{[Time of Day]} AM&quot;&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;]&lt;/span&gt;
+    &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+  &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+  date &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+    match &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;&quot;Time&quot;&lt;/span&gt;, &lt;span class=&quot;s2&quot;&gt;&quot;MM/dd/YYYY hh:mm:ss.SSS aa&quot;&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;]&lt;/span&gt;
+    target &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;s2&quot;&gt;&quot;@timestamp&quot;&lt;/span&gt;
+  &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;
+&lt;/div&gt;
+&lt;p&gt;Next we need to clean up and adjust the Network Operation events to make it easier for us to query on.  First, we filter on Network Events and we split the Path because Procmon lists network source and destination addresses on one line.  Then we reference the Operation, trigger on if it says Send or Receive.  We then designate the appropriate array element to either the source IP or destination IP depending on the Operation in play.&lt;/p&gt;
+&lt;div class=&quot;language-shell highlighter-rouge&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;  &lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt;Event Class] &lt;span class=&quot;o&quot;&gt;==&lt;/span&gt; &lt;span class=&quot;s2&quot;&gt;&quot;Network&quot;&lt;/span&gt;
+  &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+    mutate &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+      split &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;&quot;Path&quot;&lt;/span&gt;, &lt;span class=&quot;s2&quot;&gt;&quot;-&amp;gt;&quot;&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;]&lt;/span&gt;
+    &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+    &lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;s2&quot;&gt;&quot;Send&quot;&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;in&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt;Operation]
+      &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+        mutate &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+          add_field &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;&quot;src_ip&quot;&lt;/span&gt;, &lt;span class=&quot;s2&quot;&gt;&quot;%{[Path][0]}&quot;&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;]&lt;/span&gt;
+          add_field &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;&quot;dst_ip&quot;&lt;/span&gt;, &lt;span class=&quot;s2&quot;&gt;&quot;%{[Path][1]}&quot;&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;]&lt;/span&gt;
+        &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+      &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+    &lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;s2&quot;&gt;&quot;Receive&quot;&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;in&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt;Operation]
+      &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+        mutate &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+          add_field &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;&quot;dst_ip&quot;&lt;/span&gt;, &lt;span class=&quot;s2&quot;&gt;&quot;%{[Path][0]}&quot;&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;]&lt;/span&gt;
+          add_field &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;&quot;src_ip&quot;&lt;/span&gt;, &lt;span class=&quot;s2&quot;&gt;&quot;%{[Path][1]}&quot;&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;]&lt;/span&gt;
+        &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+      &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+  &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;
+&lt;/div&gt;
+&lt;p&gt;Lastly, we remove fields no longer needed and send the output to elastic.&lt;/p&gt;
+&lt;div class=&quot;language-shell highlighter-rouge&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;  mutate &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+    remove_field &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;s1&quot;&gt;'Time of Day'&lt;/span&gt;, &lt;span class=&quot;s1&quot;&gt;'Date &amp;amp; Time'&lt;/span&gt;, &lt;span class=&quot;s1&quot;&gt;'Time'&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;]&lt;/span&gt;
+  &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+&lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+
+output
+&lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+    elasticsearch
+    &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+        hosts &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;s2&quot;&gt;&quot;localhost&quot;&lt;/span&gt;
+        index &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;s2&quot;&gt;&quot;logstash-&quot;&lt;/span&gt;
+        document_type &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;s2&quot;&gt;&quot;Procmon&quot;&lt;/span&gt;
+    &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+stdout &lt;span class=&quot;o&quot;&gt;{}&lt;/span&gt;
+&lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;
+&lt;/div&gt;
+&lt;p&gt;It will likely help if you push some mappings or reference some mappings within your Logstash config.  I find at a minimum listing the src and dst IP as ip is worthwhile.&lt;/p&gt;
+&lt;div class=&quot;language-shell highlighter-rouge&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;&lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+  &lt;span class=&quot;s2&quot;&gt;&quot;mappings&quot;&lt;/span&gt;: &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+    &lt;span class=&quot;s2&quot;&gt;&quot;procmon&quot;&lt;/span&gt;: &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+      &lt;span class=&quot;s2&quot;&gt;&quot;properties&quot;&lt;/span&gt;: &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+        &lt;span class=&quot;s2&quot;&gt;&quot;Version&quot;&lt;/span&gt;: &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+          &lt;span class=&quot;s2&quot;&gt;&quot;type&quot;&lt;/span&gt;: &lt;span class=&quot;s2&quot;&gt;&quot;text&quot;&lt;/span&gt;
+        &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;,
+        &lt;span class=&quot;s2&quot;&gt;&quot;ip_src&quot;&lt;/span&gt;: &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+          &lt;span class=&quot;s2&quot;&gt;&quot;type&quot;&lt;/span&gt;: &lt;span class=&quot;s2&quot;&gt;&quot;ip&quot;&lt;/span&gt;
+        &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;,
+        &lt;span class=&quot;s2&quot;&gt;&quot;ip_dst&quot;&lt;/span&gt;: &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+          &lt;span class=&quot;s2&quot;&gt;&quot;type&quot;&lt;/span&gt;: &lt;span class=&quot;s2&quot;&gt;&quot;ip&quot;&lt;/span&gt;
+        &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+      &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+    &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+  &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+&lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;
+&lt;/div&gt;
+&lt;p&gt;Okay, so now that we have the individual Logstash confs we like, we should set them all up into one conf.  Here is an &lt;a href=&quot;https://gist.github.com/Kvetch/ecd9cfeef4d7488a896e32af95c0d606&quot; target=&quot;_blank&quot;&gt;example&lt;/a&gt;&lt;/p&gt;
+&lt;div class=&quot;language-shell highlighter-rouge&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;input &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+  beats &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+    &lt;span class=&quot;nb&quot;&gt;type&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;s2&quot;&gt;&quot;beats&quot;&lt;/span&gt;
+    port &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; 5044
+    &lt;span class=&quot;c&quot;&gt;#codec =&amp;gt; json&lt;/span&gt;
+  &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+  file &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+    &lt;span class=&quot;nb&quot;&gt;type&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;s2&quot;&gt;&quot;procmon&quot;&lt;/span&gt;
+    &lt;span class=&quot;c&quot;&gt;############ CHANGE ###################&lt;/span&gt;
+    path &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;s2&quot;&gt;&quot;/ELK/Analysis/LogFile.CSV&quot;&lt;/span&gt;
+    &lt;span class=&quot;c&quot;&gt;############## ME ####################&lt;/span&gt;
+    start_position &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;s2&quot;&gt;&quot;beginning&quot;&lt;/span&gt;
+    sincedb_path &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;s2&quot;&gt;&quot;/dev/null&quot;&lt;/span&gt;
+  &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+  file &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+    &lt;span class=&quot;nb&quot;&gt;type&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;s2&quot;&gt;&quot;Bro&quot;&lt;/span&gt;
+    &lt;span class=&quot;c&quot;&gt;############ CHANGE ###################&lt;/span&gt;
+    path &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;s2&quot;&gt;&quot;/ELK/Analysis/Pcap/*.log&quot;&lt;/span&gt;
+    &lt;span class=&quot;c&quot;&gt;############## ME ####################&lt;/span&gt;
+    start_position &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; beginning
+    codec &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; json
+    sincedb_path &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;s2&quot;&gt;&quot;/dev/null&quot;&lt;/span&gt;
+  &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+&lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+
+filter &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+  &lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;nb&quot;&gt;type&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;]&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;==&lt;/span&gt; &lt;span class=&quot;s2&quot;&gt;&quot;procmon&quot;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+    csv &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+      separator &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;s2&quot;&gt;&quot;,&quot;&lt;/span&gt;
+      &lt;span class=&quot;c&quot;&gt;############ CHANGE ###################&lt;/span&gt;
+      columns &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;&quot;Time of Day&quot;&lt;/span&gt;,&lt;span class=&quot;s2&quot;&gt;&quot;Process Name&quot;&lt;/span&gt;,&lt;span class=&quot;s2&quot;&gt;&quot;PID&quot;&lt;/span&gt;,&lt;span class=&quot;s2&quot;&gt;&quot;Operation&quot;&lt;/span&gt;,&lt;span class=&quot;s2&quot;&gt;&quot;Path&quot;&lt;/span&gt;,&lt;span class=&quot;s2&quot;&gt;&quot;Result&quot;&lt;/span&gt;,&lt;span class=&quot;s2&quot;&gt;&quot;Detail&quot;&lt;/span&gt;,&lt;span class=&quot;s2&quot;&gt;&quot;Event Class&quot;&lt;/span&gt;,&lt;span class=&quot;s2&quot;&gt;&quot;Sequence&quot;&lt;/span&gt;,&lt;span class=&quot;s2&quot;&gt;&quot;Image Path&quot;&lt;/span&gt;,&lt;span class=&quot;s2&quot;&gt;&quot;Company&quot;&lt;/span&gt;,&lt;span class=&quot;s2&quot;&gt;&quot;Description&quot;&lt;/span&gt;,&lt;span class=&quot;s2&quot;&gt;&quot;Version&quot;&lt;/span&gt;,&lt;span class=&quot;s2&quot;&gt;&quot;User&quot;&lt;/span&gt;,&lt;span class=&quot;s2&quot;&gt;&quot;Session&quot;&lt;/span&gt;,&lt;span class=&quot;s2&quot;&gt;&quot;Command Line&quot;&lt;/span&gt;,&lt;span class=&quot;s2&quot;&gt;&quot;TID&quot;&lt;/span&gt;,&lt;span class=&quot;s2&quot;&gt;&quot;Virtualized&quot;&lt;/span&gt;,&lt;span class=&quot;s2&quot;&gt;&quot;Integrity&quot;&lt;/span&gt;,&lt;span class=&quot;s2&quot;&gt;&quot;Category&quot;&lt;/span&gt;,&lt;span class=&quot;s2&quot;&gt;&quot;Parent PID&quot;&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;]&lt;/span&gt;
+      &lt;span class=&quot;c&quot;&gt;############## ME ####################&lt;/span&gt;
+    &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+    mutate &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+      convert &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+        &lt;span class=&quot;s2&quot;&gt;&quot;PID&quot;&lt;/span&gt;       &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;s2&quot;&gt;&quot;integer&quot;&lt;/span&gt;
+        &lt;span class=&quot;s2&quot;&gt;&quot;TID&quot;&lt;/span&gt;  &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;s2&quot;&gt;&quot;integer&quot;&lt;/span&gt;
+        &lt;span class=&quot;s2&quot;&gt;&quot;Parent PID&quot;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;s2&quot;&gt;&quot;integer&quot;&lt;/span&gt;
+        &lt;span class=&quot;s2&quot;&gt;&quot;Virtualized&quot;&lt;/span&gt;  &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;s2&quot;&gt;&quot;boolean&quot;&lt;/span&gt;
+        &lt;span class=&quot;s2&quot;&gt;&quot;Session&quot;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;s2&quot;&gt;&quot;integer&quot;&lt;/span&gt;
+        &lt;span class=&quot;s2&quot;&gt;&quot;Sequence&quot;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;s2&quot;&gt;&quot;integer&quot;&lt;/span&gt;
+        &lt;span class=&quot;s2&quot;&gt;&quot;Duration&quot;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;s2&quot;&gt;&quot;float&quot;&lt;/span&gt;
+      &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+      remove_field &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;s1&quot;&gt;'message'&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;]&lt;/span&gt;
+    &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+    &lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;s2&quot;&gt;&quot;PM&quot;&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;in&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt;Time of Day]
+    &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+      mutate &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+        gsub &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;&quot;Time of Day&quot;&lt;/span&gt;, &lt;span class=&quot;s2&quot;&gt;&quot;.{7}$&quot;&lt;/span&gt;, &lt;span class=&quot;s2&quot;&gt;&quot;&quot;&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;]&lt;/span&gt;
+        split &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;&quot;Date &amp;amp; Time&quot;&lt;/span&gt;, &lt;span class=&quot;s2&quot;&gt;&quot; &quot;&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;]&lt;/span&gt;
+        add_field &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;&quot;Time&quot;&lt;/span&gt;, &lt;span class=&quot;s2&quot;&gt;&quot;%{[Date &amp;amp; Time][0]} %{[Time of Day]} PM&quot;&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;]&lt;/span&gt;
+      &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+    &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+    &lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;s2&quot;&gt;&quot;AM&quot;&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;in&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt;Time of Day]
+    &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+      mutate &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+        gsub &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;&quot;Time of Day&quot;&lt;/span&gt;, &lt;span class=&quot;s2&quot;&gt;&quot;.{7}$&quot;&lt;/span&gt;, &lt;span class=&quot;s2&quot;&gt;&quot;&quot;&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;]&lt;/span&gt;
+        split &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;&quot;Date &amp;amp; Time&quot;&lt;/span&gt;, &lt;span class=&quot;s2&quot;&gt;&quot; &quot;&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;]&lt;/span&gt;
+        add_field &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;&quot;Time&quot;&lt;/span&gt;, &lt;span class=&quot;s2&quot;&gt;&quot;%{[Date &amp;amp; Time][0]} %{[Time of Day]} AM&quot;&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;]&lt;/span&gt;
+      &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+    &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+    date &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+      match &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;&quot;Time&quot;&lt;/span&gt;, &lt;span class=&quot;s2&quot;&gt;&quot;MM/dd/YYYY hh:mm:ss.SSS aa&quot;&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;]&lt;/span&gt;
+      target &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;s2&quot;&gt;&quot;@timestamp&quot;&lt;/span&gt;
+    &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+    &lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt;Event Class] &lt;span class=&quot;o&quot;&gt;==&lt;/span&gt; &lt;span class=&quot;s2&quot;&gt;&quot;Network&quot;&lt;/span&gt;
+    &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+      mutate &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+        split &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;&quot;Path&quot;&lt;/span&gt;, &lt;span class=&quot;s2&quot;&gt;&quot;-&amp;gt;&quot;&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;]&lt;/span&gt;
+      &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+      &lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;s2&quot;&gt;&quot;Send&quot;&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;in&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt;Operation]
+        &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+          mutate &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+            add_field &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;&quot;src_ip&quot;&lt;/span&gt;, &lt;span class=&quot;s2&quot;&gt;&quot;%{[Path][0]}&quot;&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;]&lt;/span&gt;
+            add_field &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;&quot;dst_ip&quot;&lt;/span&gt;, &lt;span class=&quot;s2&quot;&gt;&quot;%{[Path][1]}&quot;&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;]&lt;/span&gt;
+          &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+        &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+      &lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;s2&quot;&gt;&quot;Receive&quot;&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;in&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt;Operation]
+        &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+          mutate &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+            add_field &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;&quot;dst_ip&quot;&lt;/span&gt;, &lt;span class=&quot;s2&quot;&gt;&quot;%{[Path][0]}&quot;&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;]&lt;/span&gt;
+            add_field &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;&quot;src_ip&quot;&lt;/span&gt;, &lt;span class=&quot;s2&quot;&gt;&quot;%{[Path][1]}&quot;&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;]&lt;/span&gt;
+          &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+        &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+    &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+    mutate &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+      remove_field &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;s1&quot;&gt;'Time of Day'&lt;/span&gt;, &lt;span class=&quot;s1&quot;&gt;'Date &amp;amp; Time'&lt;/span&gt;, &lt;span class=&quot;s1&quot;&gt;'Time'&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;]&lt;/span&gt;
+    &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+  &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+
+
+  &lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;nb&quot;&gt;type&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;]&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;==&lt;/span&gt; &lt;span class=&quot;s2&quot;&gt;&quot;bro-logs&quot;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+    date &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+      match &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt; &lt;span class=&quot;s2&quot;&gt;&quot;ts&quot;&lt;/span&gt;, &lt;span class=&quot;s2&quot;&gt;&quot;UNIX&quot;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;]&lt;/span&gt;
+      target &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;s2&quot;&gt;&quot;@timestamp&quot;&lt;/span&gt;
+      remove_field &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt; &lt;span class=&quot;s2&quot;&gt;&quot;ts&quot;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;]&lt;/span&gt;
+    &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+    &lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt;log_path] &lt;span class=&quot;o&quot;&gt;==&lt;/span&gt; &lt;span class=&quot;s2&quot;&gt;&quot;weird&quot;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+      de_dot &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+        fields &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt;
+          &lt;span class=&quot;s2&quot;&gt;&quot;id.orig_p&quot;&lt;/span&gt;,
+          &lt;span class=&quot;s2&quot;&gt;&quot;id.resp_p&quot;&lt;/span&gt;
+        &lt;span class=&quot;o&quot;&gt;]&lt;/span&gt;
+      &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+    &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+    &lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt;log_path] &lt;span class=&quot;o&quot;&gt;==&lt;/span&gt; &lt;span class=&quot;s2&quot;&gt;&quot;software&quot;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+      de_dot &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+        fields &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt;
+          &lt;span class=&quot;s2&quot;&gt;&quot;version.major&quot;&lt;/span&gt;,
+          &lt;span class=&quot;s2&quot;&gt;&quot;version.minor&quot;&lt;/span&gt;,
+          &lt;span class=&quot;s2&quot;&gt;&quot;version.minor2&quot;&lt;/span&gt;,
+          &lt;span class=&quot;s2&quot;&gt;&quot;version.minor3&quot;&lt;/span&gt;,
+          &lt;span class=&quot;s2&quot;&gt;&quot;version.addl&quot;&lt;/span&gt;
+        &lt;span class=&quot;o&quot;&gt;]&lt;/span&gt;
+      &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+    &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+    &lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt;log_path] &lt;span class=&quot;o&quot;&gt;==&lt;/span&gt; &lt;span class=&quot;s2&quot;&gt;&quot;x509&quot;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+      de_dot &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+        fields &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt;
+          &lt;span class=&quot;s2&quot;&gt;&quot;certificate.version&quot;&lt;/span&gt;,
+          &lt;span class=&quot;s2&quot;&gt;&quot;certificate.serial&quot;&lt;/span&gt;,
+          &lt;span class=&quot;s2&quot;&gt;&quot;certificate.subject&quot;&lt;/span&gt;,
+          &lt;span class=&quot;s2&quot;&gt;&quot;certificate.issuer&quot;&lt;/span&gt;,
+          &lt;span class=&quot;s2&quot;&gt;&quot;certificate.exponent&quot;&lt;/span&gt;,
+          &lt;span class=&quot;s2&quot;&gt;&quot;certificate.curve&quot;&lt;/span&gt;,
+          &lt;span class=&quot;s2&quot;&gt;&quot;sans.dns&quot;&lt;/span&gt;,
+          &lt;span class=&quot;s2&quot;&gt;&quot;basic_constraints.ca&quot;&lt;/span&gt;
+        &lt;span class=&quot;o&quot;&gt;]&lt;/span&gt;
+      &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+    &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+    &lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt;log_path] &lt;span class=&quot;o&quot;&gt;==&lt;/span&gt; &lt;span class=&quot;s2&quot;&gt;&quot;intel&quot;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+      de_dot &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+        fields &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt;
+          &lt;span class=&quot;s2&quot;&gt;&quot;seen.indicator&quot;&lt;/span&gt;,
+          &lt;span class=&quot;s2&quot;&gt;&quot;seen.where&quot;&lt;/span&gt;,
+          &lt;span class=&quot;s2&quot;&gt;&quot;seen.node&quot;&lt;/span&gt;
+        &lt;span class=&quot;o&quot;&gt;]&lt;/span&gt;
+      &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+    &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+    mutate &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+      rename &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;&quot;id.orig_p&quot;&lt;/span&gt;, &lt;span class=&quot;s2&quot;&gt;&quot;src_port&quot;&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;]&lt;/span&gt;
+      rename &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;&quot;id.resp_p&quot;&lt;/span&gt;, &lt;span class=&quot;s2&quot;&gt;&quot;dst_port&quot;&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;]&lt;/span&gt;
+      rename &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;&quot;id.orig_h&quot;&lt;/span&gt;, &lt;span class=&quot;s2&quot;&gt;&quot;src_ip&quot;&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;]&lt;/span&gt;
+      rename &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;&quot;id.resp_h&quot;&lt;/span&gt;, &lt;span class=&quot;s2&quot;&gt;&quot;dst_ip&quot;&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;]&lt;/span&gt;
+    &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+  &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+
+  &lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;nb&quot;&gt;type&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;]&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;==&lt;/span&gt; &lt;span class=&quot;s2&quot;&gt;&quot;beats&quot;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+    mutate &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+      rename &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;&quot;client_ip&quot;&lt;/span&gt;, &lt;span class=&quot;s2&quot;&gt;&quot;src_ip&quot;&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;]&lt;/span&gt;
+      rename &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;&quot;source.ip&quot;&lt;/span&gt;, &lt;span class=&quot;s2&quot;&gt;&quot;src_ip&quot;&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;]&lt;/span&gt;
+      rename &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;&quot;client_port&quot;&lt;/span&gt;, &lt;span class=&quot;s2&quot;&gt;&quot;src_port&quot;&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;]&lt;/span&gt;
+      rename &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;&quot;source.port&quot;&lt;/span&gt;, &lt;span class=&quot;s2&quot;&gt;&quot;src_port&quot;&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;]&lt;/span&gt;
+      rename &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;&quot;dest.port&quot;&lt;/span&gt;, &lt;span class=&quot;s2&quot;&gt;&quot;dst_port&quot;&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;]&lt;/span&gt;
+      rename &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;&quot;port&quot;&lt;/span&gt;, &lt;span class=&quot;s2&quot;&gt;&quot;dst_port&quot;&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;]&lt;/span&gt;
+      rename &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;&quot;dest.ip&quot;&lt;/span&gt;, &lt;span class=&quot;s2&quot;&gt;&quot;dst_ip&quot;&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;]&lt;/span&gt;
+      rename &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;&quot;ip&quot;&lt;/span&gt;, &lt;span class=&quot;s2&quot;&gt;&quot;dst_ip&quot;&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;]&lt;/span&gt;
+    &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+  &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+&lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+
+
+output
+&lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+  &lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;nb&quot;&gt;type&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;]&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;==&lt;/span&gt; &lt;span class=&quot;s2&quot;&gt;&quot;procmon&quot;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+    elasticsearch &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+      hosts &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;s2&quot;&gt;&quot;localhost&quot;&lt;/span&gt;
+      index &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;s2&quot;&gt;&quot;procmon&quot;&lt;/span&gt;
+      document_type &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;s2&quot;&gt;&quot;Procmon&quot;&lt;/span&gt;
+      template &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;s2&quot;&gt;&quot;/Applications/ELK/confs/procmon.mappings&quot;&lt;/span&gt;
+      template_overwrite &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;nb&quot;&gt;true&lt;/span&gt;
+    &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+  &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+  &lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;nb&quot;&gt;type&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;]&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;==&lt;/span&gt; &lt;span class=&quot;s2&quot;&gt;&quot;Bro&quot;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+    elasticsearch &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+      hosts &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;s2&quot;&gt;&quot;localhost&quot;&lt;/span&gt;
+      index &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;s2&quot;&gt;&quot;bro&quot;&lt;/span&gt;
+      document_type &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;s2&quot;&gt;&quot;Bro&quot;&lt;/span&gt;
+    &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+  &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+  &lt;span class=&quot;k&quot;&gt;else&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+    elasticsearch &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+      hosts &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;s2&quot;&gt;&quot;localhost&quot;&lt;/span&gt;
+      index &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;s2&quot;&gt;&quot;beats&quot;&lt;/span&gt;
+      document_type &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;s2&quot;&gt;&quot;Beats&quot;&lt;/span&gt;
+    &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+  &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+stdout &lt;span class=&quot;o&quot;&gt;{}&lt;/span&gt;
+&lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;
+&lt;/div&gt;
+&lt;p&gt;If you want to add something like VirusTotal or SpamHaus lookups to your src or dst IPs?  Add a mutate filter to your Logstash conf like so,&lt;/p&gt;
+&lt;div class=&quot;language-shell highlighter-rouge&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;mutate &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+  add_field &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&amp;gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt; &lt;span class=&quot;s2&quot;&gt;&quot;Spamhaus_lookup&quot;&lt;/span&gt;, &lt;span class=&quot;s2&quot;&gt;&quot;http://www.spamhaus.org/query/bl?ip=%{dst_ip}&quot;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;]&lt;/span&gt;
+&lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;
+&lt;/div&gt;
+&lt;p&gt;Okay so now you have a conf that handles Sysmon via Windows Event Log consumption from Winlogbeat, Packet information from Packetbeat, Pcap parsing from Bro output, as well as Procmon parsing.  How do you use it all?  Your sequence would likely look something like the following:
+If not already started, you start your ELK stack with your Logstash config looking for Bro and Procmon output.
+You start your packet capturing for Bro (manually vmrun or script automation), for example you could use tcpdump, tshark or whatever floats your boat.  I usually use VMware for no good reason other than it only a Ctrl+R away in my shell history&lt;/p&gt;
+&lt;div class=&quot;language-bash highlighter-rouge&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;sudo /Applications/VMware&lt;span class=&quot;se&quot;&gt;\ &lt;/span&gt;Fusion.app/Contents/Library/vmnet-sniffer -e -w blah.pcap vmnet8
+&lt;/code&gt;&lt;/pre&gt;
+&lt;/div&gt;
+&lt;p&gt;Then on your VM or whatever, you start Procmon(can also be started automatically) with whatever config you like (just put the columns you select in your Logstash config), run your evil or suspected evil binary.  Stop Procmon and save it as a CSV to the dir Logstash is monitoring.
+Then you run stop sniffing and run Bro against the pcap&lt;/p&gt;
+&lt;div class=&quot;language-bash highlighter-rouge&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;sudo bro -r blah.pcap /opt/local/share/bro/policy/tuning/json-logs.bro
+&lt;/code&gt;&lt;/pre&gt;
+&lt;/div&gt;
+&lt;p&gt;From there you jump into Kibana and start your analysis.&lt;/p&gt;
+
+&lt;p&gt;Tools like Noriben and Procmon filters can help you speed up your analysis.  Luckily many of these filters and logical queries are easy to do in Kibana.  For example, you can easily build a whitelist of hashes, Registry paths, processes or network traffic.  You can also perform some logical queries, like only show me the Process Create, SetDispositionInformationFile, Create File, RegCreateKey, RegSetKey, or TCP/UDP events that were marked as SUCCESS?
+You could run queries like such and then start building repeatable search reports&lt;/p&gt;
+&lt;div class=&quot;language-shell highlighter-rouge&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;Result:SUCCESS AND Operation:CreateFile&lt;span class=&quot;k&quot;&gt;*&lt;/span&gt; AND Detail:Created AND !Detail:Opened AND !Path:&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;se&quot;&gt;\&quot;&lt;/span&gt;ProgramData&lt;span class=&quot;se&quot;&gt;\\\\&lt;/span&gt;winlogbeat&lt;span class=&quot;se&quot;&gt;\\\\\&quot;&lt;/span&gt; OR &lt;span class=&quot;se&quot;&gt;\&quot;&lt;/span&gt;Windows&lt;span class=&quot;se&quot;&gt;\\\\&lt;/span&gt;SoftwareDistribution&lt;span class=&quot;se&quot;&gt;\\\\&lt;/span&gt;WuRedir&lt;span class=&quot;se&quot;&gt;\&quot;&lt;/span&gt; OR &lt;span class=&quot;se&quot;&gt;\&quot;&lt;/span&gt;Windows&lt;span class=&quot;se&quot;&gt;\\\\&lt;/span&gt;SoftwareDistribution&lt;span class=&quot;se&quot;&gt;\\\\&lt;/span&gt;SelfUpdate&lt;span class=&quot;se&quot;&gt;\&quot;&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;)&lt;/span&gt;
+&lt;span class=&quot;c&quot;&gt;# OR Maybe&lt;/span&gt;
+_exists_:dest.ip AND _exists_:dest.port AND !dest.port:&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;445 OR 138 OR 137&lt;span class=&quot;o&quot;&gt;)&lt;/span&gt; AND !dest.ip:&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;172.&lt;span class=&quot;k&quot;&gt;*&lt;/span&gt; and 224.&lt;span class=&quot;k&quot;&gt;*&lt;/span&gt; and 255.&lt;span class=&quot;k&quot;&gt;*&lt;/span&gt; and 239.&lt;span class=&quot;k&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;)&lt;/span&gt;
+&lt;span class=&quot;c&quot;&gt;# Or Maybe something like&lt;/span&gt;
+proto:udp AND id.resp_p:53 AND _exists_:query AND _exists_:answers AND !query:&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;safebrowsing.google.com OR &lt;span class=&quot;k&quot;&gt;*&lt;/span&gt;.gstatic.com &lt;span class=&quot;k&quot;&gt;*&lt;/span&gt;.googleapis.com &lt;span class=&quot;k&quot;&gt;*&lt;/span&gt;.googleusercontent.com OR ns-cloud-d1.googledomains.com OR &lt;span class=&quot;k&quot;&gt;*&lt;/span&gt;.msftncsi.com OR &lt;span class=&quot;k&quot;&gt;*&lt;/span&gt;.adobe.com&lt;span class=&quot;k&quot;&gt;*&lt;/span&gt; OR &lt;span class=&quot;k&quot;&gt;*&lt;/span&gt;.microsoft.com&lt;span class=&quot;k&quot;&gt;*&lt;/span&gt; OR &lt;span class=&quot;k&quot;&gt;*&lt;/span&gt;.doubleclick.net OR &lt;span class=&quot;k&quot;&gt;*&lt;/span&gt;.windowsupdate.nsatc.net OR oscp.verisign.com OR &lt;span class=&quot;k&quot;&gt;*&lt;/span&gt;.windowsupdate.com OR &lt;span class=&quot;k&quot;&gt;*&lt;/span&gt;.google.com&lt;span class=&quot;o&quot;&gt;)&lt;/span&gt; AND !answers:&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;*&lt;/span&gt;.googleusercontent.com OR &lt;span class=&quot;k&quot;&gt;*&lt;/span&gt;.facebook.com OR &lt;span class=&quot;k&quot;&gt;*&lt;/span&gt;.msftncsi.com OR &lt;span class=&quot;k&quot;&gt;*&lt;/span&gt;.adobe.com OR &lt;span class=&quot;k&quot;&gt;*&lt;/span&gt;.doubleclick.net OR &lt;span class=&quot;k&quot;&gt;*&lt;/span&gt;.windowsupdate.nsatc.net OR safebrowsing.google.com OR &lt;span class=&quot;k&quot;&gt;*&lt;/span&gt;.fbcdn.net OR &lt;span class=&quot;k&quot;&gt;*&lt;/span&gt;.google.com OR &lt;span class=&quot;k&quot;&gt;*&lt;/span&gt;.akamaitechnologies.com&lt;span class=&quot;o&quot;&gt;)&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;
+&lt;/div&gt;
+&lt;p&gt;&lt;img src=&quot;http://localhost:4000/images/Bro-Query.png&quot; alt=&quot;Bro Query Example&quot; /&gt;
+&lt;img src=&quot;http://localhost:4000/images/CreateFileReport.png&quot; alt=&quot;CreateFile Success Report&quot; /&gt;
+Once you start tweaking your queries to match your preferences you can starting building dashboards to show you event output like tools like Noriben or CaptureBAT.
+&lt;img src=&quot;http://localhost:4000/images/Dashboard-Example.png&quot; alt=&quot;Dashboard Example Snippet&quot; /&gt;
+If others are using something similar, I would love to hear from them and if you have dashboards or reports you are willing to share, please give me a shout or post them in the comments.  Thanks!&lt;/p&gt;
+</description>
+        <pubDate>Mon, 08 May 2017 00:00:00 -0400</pubDate>
+        <link>http://localhost:4000/malware/2017/05/08/Analyzing-Endpoints-With-ELK.html</link>
+        <guid isPermaLink="true">http://localhost:4000/malware/2017/05/08/Analyzing-Endpoints-With-ELK.html</guid>
+        
+        <category>incident response</category>
+        
+        <category>ELK</category>
+        
+        <category>malware</category>
+        
+        
+        <category>malware</category>
+        
+      </item>
+    
+      <item>
+        <title>Memory Analysis of DCOM Lateral Movement Using MMC20.Application</title>
+        <description>&lt;p&gt;Continuing my analysis of lateral movement using MMC20.Application (see my &lt;a href=&quot;http://thenegative.zone/blog/MMC20.Application-Lateral-Movement-Analysis&quot; title=&quot;Analyzing MMC20.Application Lateral Movement&quot;&gt;previous post&lt;/a&gt;), the next logical course was to look in memory and see what I can find.  This post will cover my memory findings.  I will note that I performed this MMC20.Application abuse and then waited a little while before actually capturing memory.&lt;/p&gt;
+
+&lt;h2 id=&quot;process-listing-reviews&quot;&gt;Process Listing Reviews&lt;/h2&gt;
+&lt;p&gt;Like most people one of the first things you likely gravitate to looking at first is the process listings, so I run through the battery of process listings.
+&lt;br /&gt;&lt;br /&gt;
+First being pslist (I’ve snipped most of the listing, honing in only on the ones that stood out to me). &lt;br /&gt;&lt;br /&gt;
+PSList&lt;/p&gt;
+&lt;pre&gt;&lt;code class=&quot;language-shell.command&quot;&gt;Offset(V)          Name                    PID   PPID   Thds     Hnds   Sess  Wow64 Start                          Exit
+------------------ -------------------- ------ ------ ------ -------- ------ ------ ------------------------------ ------------------------------
+0xfffffa8032f54600 svchost.exe             584    464      9      359      0      0 2017-02-22 17:48:24 UTC+0000
+0xfffffa80332b0350 WmiPrvSE.exe           1984    584      0 --------      0      0 2017-02-22 17:48:27 UTC+0000   2017-02-22 18:05:00 UTC+0000
+0xfffffa80332ae060 WmiPrvSE.exe           1480    584     10      202      0      0 2017-02-22 17:48:28 UTC+0000
+0xfffffa80331d5280 dllhost.exe            3648    584      0 --------      1      0 2017-02-22 17:57:18 UTC+0000   2017-02-22 19:39:35 UTC+0000
+0xfffffa8033a20800 mmc.exe                3216    584      0 --------      0      0 2017-02-22 19:12:27 UTC+0000   2017-02-22 19:31:51 UTC+0000
+0xfffffa80334fd060 calc.exe               2040   3216      3       70      0      0 2017-02-22 19:13:10 UTC+0000
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;PSTree&lt;/p&gt;
+&lt;pre&gt;&lt;code class=&quot;language-shell.command&quot;&gt;.. 0xfffffa8032f54600:svchost.exe                     584    464      9    359 2017-02-22 17:48:24 UTC+0000
+... 0xfffffa80332b0350:WmiPrvSE.exe                  1984    584      0 ------ 2017-02-22 17:48:27 UTC+0000
+... 0xfffffa80332ae060:WmiPrvSE.exe                  1480    584     10    202 2017-02-22 17:48:28 UTC+0000
+... 0xfffffa80331d5280:dllhost.exe                   3648    584      0 ------ 2017-02-22 17:57:18 UTC+0000
+... 0xfffffa8033a20800:mmc.exe                       3216    584      0 ------ 2017-02-22 19:12:27 UTC+0000
+.... 0xfffffa80334fd060:calc.exe                     2040   3216      3     70 2017-02-22 19:13:10 UTC+0000
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;PSScan&lt;/p&gt;
+&lt;pre&gt;&lt;code class=&quot;language-shell.command&quot;&gt;Offset(P)          Name                PID   PPID PDB                Time created                   Time exited
+------------------ ---------------- ------ ------ ------------------ ------------------------------ ------------------------------
+0x00000000fd19e880 mmc.exe            3216    584 0x000000000db96000 2017-02-22 19:12:27 UTC+0000   2017-02-22 19:31:51 UTC+0000
+0x00000000fd87b0e0 calc.exe           2040   3216 0x00000000274a7000 2017-02-22 19:13:10 UTC+0000
+0x00000000fda2c0e0 WmiPrvSE.exe       1480    584 0x0000000085b3f000 2017-02-22 17:48:28 UTC+0000
+0x00000000fda2e3d0 WmiPrvSE.exe       1984    584 0x000000008e7a7000 2017-02-22 17:48:27 UTC+0000   2017-02-22 18:05:00 UTC+0000
+0x00000000fdd53300 dllhost.exe        3648    584 0x00000000b5b54000 2017-02-22 17:57:18 UTC+0000   2017-02-22 19:39:35 UTC+0000
+0x00000000fded2680 svchost.exe         584    464 0x0000000099da2000 2017-02-22 17:48:24 UTC+0000
+0x00000000ff59aa50 WmiPrvSE.exe       1800    584 0x00000001262f4000 2017-02-22 19:25:39 UTC+0000   2017-02-22 19:31:52 UTC+0000
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;PSXView&lt;/p&gt;
+&lt;pre&gt;&lt;code class=&quot;language-shell.command&quot;&gt;Offset(P)          Name                    PID pslist psscan thrdproc pspcid csrss session deskthrd ExitTime
+------------------ -------------------- ------ ------ ------ -------- ------ ----- ------- -------- --------
+0x00000000fded2680 svchost.exe             584 True   True   True     True   True  True    False
+0x00000000fda2c0e0 WmiPrvSE.exe           1480 True   True   True     True   True  True    False
+0x00000000fd87b0e0 calc.exe               2040 True   True   True     True   True  True    True
+0x00000000fda2e3d0 WmiPrvSE.exe           1984 True   True   False    True   False True    False    2017-02-22 18:05:00 UTC+0000
+0x00000000fdd53300 dllhost.exe            3648 True   True   False    True   False True    False    2017-02-22 19:39:35 UTC+0000
+0x00000000fd19e880 mmc.exe                3216 True   True   False    True   False True    False    2017-02-22 19:31:51 UTC+0000
+0x00000000ff59aa50 WmiPrvSE.exe           1800 False  True   False    False  False False   False    2017-02-22 19:31:52 UTC+0000
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;One of the first things I noticed was all the processes with svchost as their ParentProcess.  You might also notice that psscan’s pool tag scanner it shows process 1800 where pslist does not.&lt;br /&gt;&lt;/p&gt;
+
+&lt;p&gt;You’ll likely also notice that mmc has a process running under it.  This too seems odd to me, combined with the fact that svchost has a handful on non-service like processes running under it (excluding the WmiPrvSE and dllhost which are inherent to this type of activity).&lt;br /&gt;&lt;/p&gt;
+
+&lt;p&gt;The next logical step might be to look at the command-line arguments used.  For this we turn to cmdline, which shows us that svchost service launched a DCOM response to an object activation request.&lt;/p&gt;
+&lt;pre&gt;&lt;code class=&quot;language-shell.command&quot;&gt;************************************************************************
+svchost.exe pid:    584
+Command line : C:\Windows\system32\svchost.exe -k DcomLaunch
+************************************************************************
+WmiPrvSE.exe pid:   1480
+Command line : C:\Windows\system32\wbem\wmiprvse.exe
+************************************************************************
+WmiPrvSE.exe pid:   1984
+************************************************************************
+dllhost.exe pid:   3648
+************************************************************************
+mmc.exe pid:   3216
+************************************************************************
+calc.exe pid:   2040
+Command line : &quot;C:\Windows\System32\calc.exe&quot;
+************************************************************************
+&lt;/code&gt;&lt;/pre&gt;
+
+&lt;p&gt;The next step might be to look at the loaded dlls but from the processes above but in this case we know it is loading legitimate processes and for the sake of brevity I will skip some steps like looking for injection, dll, drivers, registry reviews and so forth.&lt;/p&gt;
+
+&lt;h2 id=&quot;sid-reviews&quot;&gt;SID Reviews&lt;/h2&gt;
+&lt;p&gt;From this point I am still trying to gather more information on the processes I am potentially concerned with, so I ran GetSIDs.  You’ll likely also notice that a few processes appear to belong to the user ‘administrator’.  You’ll also notice that many of these processes aren’t running interactively or via physical console but via NTLM Authentication.  This gives us more of an understanding who and how these suspicious processes were launched.&lt;/p&gt;
+&lt;pre&gt;&lt;code class=&quot;language-shell.command&quot;&gt;svchost.exe (584): S-1-5-18 (Local System)
+svchost.exe (584): S-1-16-16384 (System Mandatory Level)
+svchost.exe (584): S-1-1-0 (Everyone)
+svchost.exe (584): S-1-5-32-545 (Users)
+svchost.exe (584): S-1-5-6 (Service)
+svchost.exe (584): S-1-5-11 (Authenticated Users)
+svchost.exe (584): S-1-5-15 (This Organization)
+svchost.exe (584): S-1-5-80-1601830629-990752416-3372939810-977361409-3075122917 (DcomLaunch)
+svchost.exe (584): S-1-5-80-1981970923-922788642-3535304421-2999920573-318732269 (PlugPlay)
+svchost.exe (584): S-1-5-80-2343416411-2961288913-598565901-392633850-2111459193 (Power)
+svchost.exe (584): S-1-5-5-0-51301 (Logon Session)
+svchost.exe (584): S-1-2-0 (Local (Users with the ability to log in locally))
+svchost.exe (584): S-1-5-32-544 (Administrators)
+WmiPrvSE.exe (1480): S-1-5-20 (NT Authority)
+WmiPrvSE.exe (1480): S-1-16-16384 (System Mandatory Level)
+WmiPrvSE.exe (1480): S-1-1-0 (Everyone)
+WmiPrvSE.exe (1480): S-1-5-32-545 (Users)
+WmiPrvSE.exe (1480): S-1-5-6 (Service)
+WmiPrvSE.exe (1480): S-1-2-1 (Console Logon (Users who are logged onto the physical console))
+WmiPrvSE.exe (1480): S-1-5-11 (Authenticated Users)
+WmiPrvSE.exe (1480): S-1-5-15 (This Organization)
+WmiPrvSE.exe (1480): S-1-5-86-615999462-62705297-2911207457-59056572-3668589837 (WMI (Network Service))
+WmiPrvSE.exe (1480): S-1-5-5-0-137850 (Logon Session)
+WmiPrvSE.exe (1984): S-1-5-18 (Local System)
+WmiPrvSE.exe (1984): S-1-16-16384 (System Mandatory Level)
+WmiPrvSE.exe (1984): S-1-1-0 (Everyone)
+WmiPrvSE.exe (1984): S-1-5-32-545 (Users)
+WmiPrvSE.exe (1984): S-1-5-6 (Service)
+WmiPrvSE.exe (1984): S-1-2-1 (Console Logon (Users who are logged onto the physical console))
+WmiPrvSE.exe (1984): S-1-5-11 (Authenticated Users)
+WmiPrvSE.exe (1984): S-1-5-15 (This Organization)
+WmiPrvSE.exe (1984): S-1-5-80-2962817144-200689703-2266453665-3849882635-1986547430 (BDESVC)
+WmiPrvSE.exe (1984): S-1-5-80-864916184-135290571-3087830041-1716922880-4237303741 (BITS)
+WmiPrvSE.exe (1984): S-1-5-80-3256172449-2363790065-3617575471-4144056108-756904704 (CertPropSvc)
+WmiPrvSE.exe (1984): S-1-5-80-3578261754-285310837-913589462-2834155770-667502746 (EapHost)
+WmiPrvSE.exe (1984): S-1-5-80-1373701630-3910968185-3388013410-2492353-937432973 (hkmsvc)
+WmiPrvSE.exe (1984): S-1-5-80-698886940-375981264-2691324669-2937073286-3841916615 (IKEEXT)
+WmiPrvSE.exe (1984): S-1-5-80-62724632-2456781206-3863850748-1496050881-1042387526 (iphlpsvc)
+WmiPrvSE.exe (1984): S-1-5-80-879696042-2351668846-370232824-2524288904-4023536711 (LanmanServer)
+WmiPrvSE.exe (1984): S-1-5-80-2799810402-4136494038-1094338311-2889966999-3154753985 (MMCSS)
+WmiPrvSE.exe (1984): S-1-5-80-917953661-2020045820-2727011118-2260243830-4032185929 (MSiSCSI)
+WmiPrvSE.exe (1984): S-1-5-80-1802467488-1541022566-2033325545-854566965-652742428 (RasAuto)
+WmiPrvSE.exe (1984): S-1-5-80-4176366874-305252471-2256717057-2714189771-3552532790 (RasMan)
+WmiPrvSE.exe (1984): S-1-5-80-1954729425-4294152082-187165618-318331177-3831297489 (RemoteAccess)
+WmiPrvSE.exe (1984): S-1-5-80-4125092361-1567024937-842823819-2091237918-836075745 (Schedule)
+WmiPrvSE.exe (1984): S-1-5-80-1691538513-4084330536-1620899472-1113280783-3554754292 (SCPolicySvc)
+WmiPrvSE.exe (1984): S-1-5-80-4259241309-1822918763-1176128033-1339750638-3428293995 (SENS)
+WmiPrvSE.exe (1984): S-1-5-80-4022436659-1090538466-1613889075-870485073-3428993833 (SessionEnv)
+WmiPrvSE.exe (1984): S-1-5-80-2009329905-444645132-2728249442-922493431-93864177 (SharedAccess)
+WmiPrvSE.exe (1984): S-1-5-80-1690854464-3758363787-3981977099-3843555589-1401248062 (ShellHWDetection)
+WmiPrvSE.exe (1984): S-1-5-80-3594706986-2537596223-181334840-1741483385-1351671666 (wercplsupport)
+WmiPrvSE.exe (1984): S-1-5-80-3750560858-172214265-3889451188-1914796615-4100997547 (Winmgmt)
+WmiPrvSE.exe (1984): S-1-5-80-1014140700-3308905587-3330345912-272242898-93311788 (wuauserv)
+WmiPrvSE.exe (1984): S-1-5-5-0-77489 (Logon Session)
+WmiPrvSE.exe (1984): S-1-2-0 (Local (Users with the ability to log in locally))
+WmiPrvSE.exe (1984): S-1-5-32-544 (Administrators)
+dllhost.exe (3648): S-1-5-21-1923566281-4131265335-1104240599-500 (administrator)
+dllhost.exe (3648): S-1-5-21-1923566281-4131265335-1104240599-513 (Domain Users)
+dllhost.exe (3648): S-1-1-0 (Everyone)
+dllhost.exe (3648): S-1-5-32-545 (Users)
+dllhost.exe (3648): S-1-5-32-544 (Administrators)
+dllhost.exe (3648): S-1-5-4 (Interactive)
+dllhost.exe (3648): S-1-2-1 (Console Logon (Users who are logged onto the physical console))
+dllhost.exe (3648): S-1-5-11 (Authenticated Users)
+dllhost.exe (3648): S-1-5-15 (This Organization)
+dllhost.exe (3648): S-1-5-5-0-758235 (Logon Session)
+dllhost.exe (3648): S-1-2-0 (Local (Users with the ability to log in locally))
+dllhost.exe (3648): S-1-5-21-1923566281-4131265335-1104240599-520 (Group Policy Creator Owners)
+dllhost.exe (3648): S-1-5-21-1923566281-4131265335-1104240599-512 (Domain Admins)
+dllhost.exe (3648): S-1-5-21-1923566281-4131265335-1104240599-518 (Schema Admins)
+dllhost.exe (3648): S-1-5-21-1923566281-4131265335-1104240599-519 (Enterprise Admins)
+dllhost.exe (3648): S-1-18-1 (Authentication Authority Asserted Identity)
+dllhost.exe (3648): S-1-5-21-1923566281-4131265335-1104240599-572
+dllhost.exe (3648): S-1-16-12288 (High Mandatory Level)
+mmc.exe (3216): S-1-5-21-1923566281-4131265335-1104240599-500 (administrator)
+mmc.exe (3216): S-1-5-21-1923566281-4131265335-1104240599-513 (Domain Users)
+mmc.exe (3216): S-1-1-0 (Everyone)
+mmc.exe (3216): S-1-5-32-545 (Users)
+mmc.exe (3216): S-1-5-32-544 (Administrators)
+mmc.exe (3216): S-1-5-2 (Network)
+mmc.exe (3216): S-1-5-11 (Authenticated Users)
+mmc.exe (3216): S-1-5-15 (This Organization)
+mmc.exe (3216): S-1-5-21-1923566281-4131265335-1104240599-520 (Group Policy Creator Owners)
+mmc.exe (3216): S-1-5-21-1923566281-4131265335-1104240599-512 (Domain Admins)
+mmc.exe (3216): S-1-5-21-1923566281-4131265335-1104240599-518 (Schema Admins)
+mmc.exe (3216): S-1-5-21-1923566281-4131265335-1104240599-519 (Enterprise Admins)
+mmc.exe (3216): S-1-18-1 (Authentication Authority Asserted Identity)
+mmc.exe (3216): S-1-5-21-1923566281-4131265335-1104240599-572
+mmc.exe (3216): S-1-5-64-10 (NTLM Authentication)
+mmc.exe (3216): S-1-16-12288 (High Mandatory Level)
+calc.exe (2040): S-1-5-21-1923566281-4131265335-1104240599-500 (administrator)
+calc.exe (2040): S-1-5-21-1923566281-4131265335-1104240599-513 (Domain Users)
+calc.exe (2040): S-1-1-0 (Everyone)
+calc.exe (2040): S-1-5-32-545 (Users)
+calc.exe (2040): S-1-5-32-544 (Administrators)
+calc.exe (2040): S-1-5-2 (Network)
+calc.exe (2040): S-1-5-11 (Authenticated Users)
+calc.exe (2040): S-1-5-15 (This Organization)
+calc.exe (2040): S-1-5-21-1923566281-4131265335-1104240599-520 (Group Policy Creator Owners)
+calc.exe (2040): S-1-5-21-1923566281-4131265335-1104240599-512 (Domain Admins)
+calc.exe (2040): S-1-5-21-1923566281-4131265335-1104240599-518 (Schema Admins)
+calc.exe (2040): S-1-5-21-1923566281-4131265335-1104240599-519 (Enterprise Admins)
+calc.exe (2040): S-1-18-1 (Authentication Authority Asserted Identity)
+calc.exe (2040): S-1-5-21-1923566281-4131265335-1104240599-572
+calc.exe (2040): S-1-5-64-10 (NTLM Authentication)
+calc.exe (2040): S-1-16-12288 (High Mandatory Level)
+&lt;/code&gt;&lt;/pre&gt;
+
+&lt;h2 id=&quot;network-review&quot;&gt;Network Review&lt;/h2&gt;
+&lt;p&gt;As mentioned above, I waited a little while (40 odd minutes) before capturing memory since most situations don’t automatically have evil executed and then automatically have memory acquired.&lt;br /&gt;
+Next I looked at the network connections and listening processes still resident in memory.  Running netscan we see the following:&lt;/p&gt;
+&lt;pre&gt;&lt;code class=&quot;language-shell.command&quot;&gt;Offset(P)          Proto    Local Address                  Foreign Address      State            Pid      Owner          Created
+0x13d760a20        TCPv4    0.0.0.0:49230                  0.0.0.0:0            LISTENING        3216     mmc.exe
+0x13d760a20        TCPv6    :::49230                       :::0                 LISTENING        3216     mmc.exe
+&lt;/code&gt;&lt;/pre&gt;
+
+&lt;h2 id=&quot;services-review&quot;&gt;Services Review&lt;/h2&gt;
+&lt;p&gt;In this case, I don’t have a great need to look at the services but regardless SvcScan shows the following regarding svcscan’s DcomLaunch:&lt;/p&gt;
+&lt;pre&gt;&lt;code class=&quot;language-shell.command&quot;&gt;Shows svcscan with dcom started
+Offset: 0x98f220
+Order: 234
+Start: SERVICE_AUTO_START
+Process ID: 584
+Service Name: Power
+Display Name: Power
+Service Type: SERVICE_WIN32_SHARE_PROCESS
+Service State: SERVICE_RUNNING
+Binary Path: C:\Windows\system32\svchost.exe -k DcomLaunch
+&lt;/code&gt;&lt;/pre&gt;
+
+&lt;h2 id=&quot;sessions-review&quot;&gt;Sessions Review&lt;/h2&gt;
+&lt;p&gt;Now that we know a little more about the processes (who and how) we can dig a little deeper to help solidify our findings.  Looking at the logon session space is a great place to understand a little more about what you are dealing with.  The session information of note is listed below but one thing that stands out to me is our processes of interest are all running under Session ID 0 (understandable in this case) and the kernel driver loaded is TSDDD.dll, not cdd.dll, rdpdd.dll or something similar.  &lt;a href=&quot;https://msdn.microsoft.com/en-us/library/aa940056(v=winembedded.5).aspx&quot; title=&quot;MSDN - TSDDD.dll info&quot;&gt;TSDDD.dll&lt;/a&gt; is the terminal services VGA display driver and unlike the Canonical Display Driver (cdd.dll) it is meant for headless rendering.  It is also used when the video driver is undetermined for console disconnects and reconnects, so we can infer that mmc and calc was definitely launched/leveraged in some non-GUI manner.&lt;/p&gt;
+&lt;pre&gt;&lt;code class=&quot;language-shell.command&quot;&gt;**************************************************
+Session(V): fffff88004686000 ID: 0 Processes: 51
+PagedPoolStart: fffff900c0000000 PagedPoolEnd fffff920bfffffff
+[snip]
+ Process: 584 svchost.exe 2017-02-22 17:48:24 UTC+0000
+ Process: 1984 WmiPrvSE.exe 2017-02-22 17:48:27 UTC+0000
+ Process: 2004 TPAutoConnSvc. 2017-02-22 17:48:27 UTC+0000
+ Process: 1480 WmiPrvSE.exe 2017-02-22 17:48:28 UTC+0000
+ Process: 2656 WmiApSrv.exe 2017-02-22 17:50:51 UTC+0000
+ Process: 3216 mmc.exe 2017-02-22 19:12:27 UTC+0000
+ Process: 2040 calc.exe 2017-02-22 19:13:10 UTC+0000
+ Image: 0xfffffa80320427c0, Address fffff96000050000, Name: win32k.sys
+ Image: 0xfffffa8030f51d00, Address fffff96000450000, Name: TSDDD.dll
+&lt;/code&gt;&lt;/pre&gt;
+
+&lt;h2 id=&quot;atom-table-review&quot;&gt;Atom Table Review&lt;/h2&gt;
+&lt;p&gt;So now we know a decent bit about this pure evil activity of calc.exe but we still don’t know explicitly how this execution happened.  There are a handful of ways you might be able to pull more on that thread, such as reviewing the strings of the processes noted or in free memory or perhaps in the pagefile but sometimes you can get some quick wins by reviewing the atom table, which usually contain some juicy strings being used by functions and they usually remain resident in the table even after whatever API function pushed them onto the table.  In this case I noted the following atoms:
+ &lt;em&gt;The cmds atomscan and atoms different parsing techniques gave me the same finding in respect to strings shown below, so I won’t bother to show both outputs.&lt;/em&gt;&lt;/p&gt;
+&lt;pre&gt;&lt;code class=&quot;language-shell.command&quot;&gt; Offset(V)  Session     WindowStation                  Atom  RefCount    HIndex     Pinned   Name
+------------------ ---------- ------------------ ------------------ ---------- ---------- ---------- ----
+[snip]
+0x97729470 ---------- ------------------    0xc09d     3         157         0      CCF_DISPLAY_NAME
+0x97729470 ---------- ------------------    0xc0fc     1         252       0      CCF_MMC_DYNAMIC_EXTENSIONS
+0x1334ce4f0 ---------- ------------------    0xc09b     4         155         0      CCF_NODETYPE
+0x1334ce4f0 ---------- ------------------    0xc0fd     1         253         0      CCF_COLUMN_SET_ID
+0x97729470 ---------- ------------------    0xc09e     3         158         0      CCF_SNAPIN_CLASSID
+0x97729470 ---------- ------------------    0xc09c     3         156         0      CCF_SZNODETYPE
+0x1334ce4f0 ---------- ------------------    0xc0a2     2         162         0      CCF_DTC_RESOURCE
+0x1334ce4f0 ---------- ------------------    0xc0a1     2         161         0      CCF_DTC_HOSTNAME
+0x1334ce4f0 ---------- ------------------    0xc0fb     1         251         0      CCF_SNAPIN_PRELOADS
+0x1334ce4f0 ---------- ------------------    0xc09f     2         159         0      CCF_COM_WORKSTATION
+[snip]
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;So why do I highlight those?  Because DCOM objects use the &lt;a href=&quot;https://msdn.microsoft.com/en-us/library/windows/desktop/ms688421(v=vs.85).aspx&quot; title=&quot;Windows Dev Center - IDataObject&quot;&gt;IDataObject Interface&lt;/a&gt; and the consumers of the data being piped via a DCOM object calls the &lt;a href=&quot;https://msdn.microsoft.com/en-us/library/windows/desktop/ms687266(v=vs.85).aspx&quot; title=&quot;Windows Dev Center - GetDataHere&quot;&gt;GetDataHere&lt;/a&gt; method and low and behold the GetDataHere method requires the object to support the following clipboard formats (see the following &lt;a href=&quot;https://msdn.microsoft.com/en-us/library/aa815059(v=vs.85).aspx&quot; title=&quot;MMC20 Clipboard Formats&quot;&gt;Dev Center reference&lt;/a&gt;) which are pushed onto the Atom Table:&lt;/p&gt;
+&lt;ul&gt;
+  &lt;li&gt;CCF_DISPLAY_NAME&lt;/li&gt;
+  &lt;li&gt;CCF_NODETYPE&lt;/li&gt;
+  &lt;li&gt;CCF_SNAPIN_CLASSID&lt;/li&gt;
+  &lt;li&gt;CCF_SZNODETYPE&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;h2 id=&quot;strings-review&quot;&gt;Strings Review&lt;/h2&gt;
+&lt;p&gt;Okay, so now we know a little more regarding the DCOM use but we haven’t nailed down exactly how it was processed.  A review of strings may help here.  Reviewing the strings output (skipping a ton of the other process strings and free memory strings), we note the following references that clearly tell the tale a little more (note the MMC20.Application specifically).&lt;/p&gt;
+&lt;pre&gt;&lt;code class=&quot;language-shell.command&quot;&gt;[snip]
+421901668 [FREE MEMORY:-1] [01;31MMCCtrl class
+421902036 [FREE MEMORY:-1] @%SystemRoot%\system32\[01;31mmcbase.dll,-130
+421902508 [FREE MEMORY:-1] @%SystemRoot%\system32\[01;31mmcbase.dll,-13351
+421902788 [FREE MEMORY:-1] %SystemRoot%\system32\[01;31mmc.exe /a &quot;%1&quot; %*
+421903100 [FREE MEMORY:-1] %SystemRoot%\system32\[01;31mmc.exe &quot;%1&quot; %*
+421903468 [FREE MEMORY:-1] %SystemRoot%\system32\[01;31mmc.exe &quot;%1&quot; %*
+421904036 [FREE MEMORY:-1] [01;31MMC Application Class
+421904236 [FREE MEMORY:-1] [01;31MMC Application Class
+1852759296 [FREE MEMORY:-1] [01;31MMC20.Application
+1908179520 [kernel:f980367a0240] C:\Windows\system32\[01;31mmc.exe
+1908180560 [kernel:f980367a0650] C:\Windows\system32\[01;31mmc.exe
+1910865034 [896:8ad71c8a] [01;31MMCFxCommon
+1910865138 [896:8ad71cf2] [01;31MMCFXC~1
+1912979676 [388:006c30dc] %SystemRoot%\system32\[01;31mmc.exe
+1912979780 [388:006c3144] %SystemRoot%\system32\[01;31mmc.exe
+1912979972 [388:006c3204] [01;31MMC20.Application.1
+1912980164 [388:006c32c4] [01;31MMC20.Application
+1912980288 [388:006c3340] [01;31MMC20.Application.1
+1912980340 [388:006c3374] [01;31MMC Application Class
+1912980696 [388:006c34d8] [01;31MMC20.Application
+1912980748 [388:006c350c] [01;31MMC Application Class
+1912981164 [388:006c36ac] [01;31MMC20.Application.1
+1912981556 [388:006c3834] %SystemRoot%\system32\[01;31mmcshext.dll
+1912982044 [388:006c3a1c] %SystemRoot%\system32\[01;31mmcshext.dll
+1912982348 [388:006c3b4c] [01;31Mmcshext.ExtractIcon.1
+1912982548 [388:006c3c14] [01;31Mmcshext.ExtractIcon
+1912982672 [388:006c3c90] [01;31Mmcshext.ExtractIcon.1
+1912983064 [388:006c3e18] [01;31Mmcshext.ExtractIcon
+1912983524 [388:006c3fe4] [01;31Mmcshext.ExtractIcon.1
+1915928306 [FREE MEMORY:-1] \windows\system32\[01;31mmc.exe
+1915928546 [FREE MEMORY:-1] \windows\system32\[01;31mmc.exe
+[snip]
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;&lt;br /&gt;
+I will mention that poking around using Yarascan and volshell poking revealed some IP indicators but they didn’t necessarily allow me to tie back to the activity noted (mmc.exe and calc), so I opted to leave them out. &lt;br /&gt;&lt;/p&gt;
+
+&lt;p&gt;So hammering through some of the still resident artifacts present in memory still provided us enough clues as to what likely transpired but it definitely didn’t stick out as a sore thumb.  Searching for activity in a manner like this was somewhat similar tactically to malware analysis but definitely veered course from my normal reviews.  Nonetheless, it was a fun and worthwhile endeavor.&lt;/p&gt;
+</description>
+        <pubDate>Thu, 02 Mar 2017 00:00:00 -0500</pubDate>
+        <link>http://localhost:4000/incident%20response/2017/03/02/Memory-Analysis-of-MMC20.Application-Lateral-Movement.html</link>
+        <guid isPermaLink="true">http://localhost:4000/incident%20response/2017/03/02/Memory-Analysis-of-MMC20.Application-Lateral-Movement.html</guid>
+        
+        <category>incident response</category>
+        
+        <category>lateral movement</category>
+        
+        
+        <category>incident response</category>
+        
+      </item>
+    
+      <item>
+        <title>Analysis of DCOM Lateral Movement Using MMC20.Application</title>
+        <description>&lt;p&gt;The other month I read enigma0x3’s &lt;a href=&quot;https://enigma0x3.net/2017/01/05/lateral-movement-using-the-mmc20-application-com-object/&quot; title=&quot;enigma0x3.net&quot;&gt;excellent post&lt;/a&gt; on using MMC20.Application for lateral movement.  The MMC20.Application class allows for the interaction and automation of MMC.  In enigma0x3’s post he leverages the MMC20.Application class using one of the ActiveView View methods to execute a shell command of his choosing, calc.exe in this instance.&lt;br /&gt;
+This got me thinking how would I spot this lateral movement method on one of my networks.  Clearly, it doesn’t stand out like psexec or some odd service or scheduled task starting up for the first time or at a strange time.  So I figured I would test it out myself and see what artifacts I can see.&lt;br /&gt;
+So let’s poke around and see what we can see.  For my testing, I have 3 boxes running, a Windows 10 system named Baluur, a Windows 7 named Arthros and then a Domain Controller aptly named TheCrossRoadsOfInfinity.  All machine are part of thenegative.zone domain.  All boxes are also remotely logging sysmon to an ELK stack.  For the scenario, we are going to pretend the attacker has a foothold on the Windows 10 system and is now looking to pivot off their newly found access to another machine.  In this case, the Windows 7 system is the target.&lt;/p&gt;
+
+&lt;p&gt;So first I’ll ensure calc.exe isn’t already running on the Windows 7 endpoint.&lt;/p&gt;
+&lt;pre&gt;&lt;code class=&quot;language-shell.command&quot;&gt;PS C:\Windows\system32&amp;gt; gwmi Win32_Process -filter &quot;name='calc.exe'&quot; -credential thenegative.zone\Administrator -ComputerName 172.20.64.130 | select ExecutablePath, ProcessId, ParentProcessId, CommandLine|format-list
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;Just to be clear there are no instances running we use PS to look for calc.exe&lt;/p&gt;
+&lt;pre&gt;&lt;code class=&quot;language-shell.command&quot;&gt;C:\Windows\system32&amp;gt;wmic /node:172.20.64.130 /user:administrator process where name=&quot;calc.exe&quot; list
+Enter the password :************
+No Instance(s) Available.
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;&lt;br /&gt;&lt;/p&gt;
+
+&lt;h1 id=&quot;mmc20applications-lateral-movement-poc-calc-execution&quot;&gt;MMC20.Application’s Lateral Movement PoC Calc Execution&lt;/h1&gt;
+
+&lt;p&gt;The next steps will actually perform the MMC20.Application execution of calc.exe via PowerShell.  First we create an instance of MMC20.Application and then utilize the ExecuteShellCommand method.  So we are going to open a command window as Administrator (RunAsAdministrator) and then execute powershell and type the following:&lt;/p&gt;
+&lt;pre&gt;&lt;code class=&quot;language-shell.command&quot;&gt;PS C:\Windows\system32&amp;gt; $comobj = [Activator]::CreateInstance([Type]::GetTypeFromProgID(&quot;MMC20.Application&quot;,&quot;172.20.64.130&quot;));
+
+PS C:\Windows\system32&amp;gt; $comobj.Document.ActiveView.ExecuteShellCommand(&quot;C:\Windows\System32\calc.exe&quot;,$null,$null,&quot;9&quot;)
+&lt;/code&gt;&lt;/pre&gt;
+
+&lt;p&gt;Okay, so let’s check for calc.  Yup, evil calc.exe is running as PID 3728.&lt;/p&gt;
+&lt;pre&gt;&lt;code class=&quot;language-shell.command&quot;&gt;gwmi Win32_Process -filter &quot;name='calc.exe'&quot; -credential thenegative.zone\Administrator -ComputerName 172.20.64.130 | select ExecutablePath, ProcessId, ParentProcessId, CommandLine|format-list
+
+ExecutablePath  : C:\Windows\System32\calc.exe
+ProcessId       : 3728
+ParentProcessId : 196
+CommandLine     : &quot;C:\Windows\System32\calc.exe&quot;
+&lt;/code&gt;&lt;/pre&gt;
+
+&lt;p&gt;So what artifacts could would use to recognize this behavior and these actions? Let’s take a lookie loo and see what we can see.
+In this case, your auditing configuration and/or internal visibility will determine how much you can see in terms of artifacts.  On my endpoints, I am running sysmon and I pipe these events to an ELK stack for review.  To narrow down and weed out the noise, I performed the normal process of eliminating the known goods and honing in on the unknowns and clear evil that occurred during a small timeframe.&lt;/p&gt;
+
+&lt;p&gt;The analysis below is broken down into sections the reflect different components of the whole event.  I broke it down into what events would you see if someone did a RunAsAdministrator on the cmd.exe, the execution of PowerShell, the MMC20.Application COM instantiation and  execution of a process on a remote host.&lt;/p&gt;
+
+&lt;h2 id=&quot;analysis-of-cmdexe-execution-as-an-administrator&quot;&gt;Analysis of CMD.exe Execution as an Administrator&lt;/h2&gt;
+
+&lt;p&gt;For my own education I figured I would take the time to see what exactly happens when a user does a RunAsAdministrator on cmd.exe on a Windows 10 machine.  The following represents those actions:
+&lt;br /&gt;
+&lt;br /&gt;
+&lt;strong&gt;On the Windows 10 machine (the one the attacker already has a foothold on), we see a trickle of events from S-1-5-18(Administrator)&lt;/strong&gt;&lt;/p&gt;
+&lt;ul&gt;
+  &lt;li&gt;Enumeration of the Administrators Group with the callerprocessname of consent.exe.  EventID 4799&lt;/li&gt;
+  &lt;li&gt;Execution of consent.exe (ParentProcess is svchost) by S-1-5-18(Administrator)&lt;/li&gt;
+  &lt;li&gt;AUDIT_SUCCESS  (EventID 4799) event regarding a security-enabled local group membership was enumerated by the consent.exe process.&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;&lt;br /&gt;
+&lt;strong&gt;On the Domain Controller, we see the following:&lt;/strong&gt;&lt;/p&gt;
+&lt;ul&gt;
+  &lt;li&gt;A new special privileges logon request from S-1-5-18 with an EventType of AUDIT_SUCCESS (EventID 4672, Logon ID 0x9E1C7)
+    &lt;ul&gt;
+      &lt;li&gt;A Message containing:&lt;br /&gt;
+        &lt;ul&gt;
+          &lt;li&gt;Privileges:&lt;br /&gt;
+SeSecurityPrivilege&lt;br /&gt;
+SeBackupPrivilege&lt;br /&gt;
+SeRestorePrivilege&lt;br /&gt;
+SeTakeOwnershipPrivilege&lt;br /&gt;
+SeDebugPrivilege&lt;br /&gt;
+SeSystemEnvironmentPrivilege&lt;br /&gt;
+SeLoadDriverPrivilege&lt;br /&gt;
+SeImpersonatePrivilege&lt;br /&gt;
+SeDelegateSessionUserImpersonatePrivilege&lt;br /&gt;
+SeEnableDelegationPrivilege\&lt;/li&gt;
+        &lt;/ul&gt;
+      &lt;/li&gt;
+    &lt;/ul&gt;
+  &lt;/li&gt;
+  &lt;li&gt;We then see the logon session (0x9E1C7) destroyed. &lt;em&gt;I have to be honest here, I am unsure why it is created and then destroyed within a fraction of a second.&lt;/em&gt;&lt;/li&gt;
+  &lt;li&gt;We then see an impersonation LogonType 3(Network) Kerberos authentication&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;&lt;br /&gt;
+&lt;strong&gt;Back on the Win10 box we see:&lt;/strong&gt;&lt;/p&gt;
+&lt;ul&gt;
+  &lt;li&gt;A Negotiate Logon AUDIT_SUCCESS (EventID 4624) event for Administrator with Impersonation Level = Impersonation, from process consent and Logon Process CredPro&lt;/li&gt;
+  &lt;li&gt;A security-enabled local group membership was enumerated by the consent.exe process&lt;/li&gt;
+  &lt;li&gt;Special Privileges were assigned to the new logon&lt;/li&gt;
+  &lt;li&gt;The consent.exe process was terminated&lt;/li&gt;
+  &lt;li&gt;Now we see the cmd.exe process created under the user Administrator with a ParentProcess of RunTimeBroker.exe -Embedding&lt;/li&gt;
+  &lt;li&gt;We then see the conhost.exe process created with the parent process being cmd.exe&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;&lt;img src=&quot;http://localhost:4000/images/consent-exe.png&quot; alt=&quot;Consent Image&quot; /&gt;&lt;/p&gt;
+
+&lt;p&gt;I haven’t dug into it but I am not 100% sure in what circumstances RunTimeBroker isn’t the ParentProcess but for standard GUI actions, RunTimeBroker seems to be the ParentProcess.&lt;/p&gt;
+
+&lt;h2 id=&quot;powershell-execution&quot;&gt;PowerShell Execution&lt;/h2&gt;
+
+&lt;p&gt;When PowerShell executes we see a handful of events.  These events were from a standard Windows 10 install with no modifications to PowerShell or its providers.  See the following &lt;a href=&quot;https://blogs.technet.microsoft.com/heyscriptingguy/2015/04/20/find-and-use-windows-powershell-providers/&quot;&gt;PowerShell Providers&lt;/a&gt; Info:&lt;/p&gt;
+&lt;ul&gt;
+  &lt;li&gt;The PowerShell &lt;a href=&quot;https://msdn.microsoft.com/en-us/powershell/reference/5.0/microsoft.powershell.core/providers/registry-provider&quot;&gt;Registry Provider Class&lt;/a&gt; is started with the HostApplication being PowerShell and HostName of ConsoleHost within the PowerShell Event Logs.&lt;/li&gt;
+  &lt;li&gt;The C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe process is created with a ParentProcess of cmd.exe
+    &lt;ul&gt;
+      &lt;li&gt;ProcessId: 3372&lt;/li&gt;
+    &lt;/ul&gt;
+  &lt;/li&gt;
+  &lt;li&gt;The PowerShell &lt;a href=&quot;https://msdn.microsoft.com/en-us/powershell/reference/5.0/microsoft.powershell.core/providers/alias-provider&quot;&gt;Alias Provider Class&lt;/a&gt; is started with the HostApplication being PowerShell and HostName of ConsoleHost within the PowerShell Event Logs.&lt;/li&gt;
+  &lt;li&gt;The PowerShell process creates a temp file
+    &lt;ul&gt;
+      &lt;li&gt;C:\Users\administrator\AppData\Roaming\Microsoft\Windows\Recent\CustomDestinations.&lt;/li&gt;
+      &lt;li&gt;In my case it wrote -&amp;gt; C:\Users\administrator\AppData\Roaming\Microsoft\Windows\Recent\CustomDestinations\UCE6FW0FI2TZT8PEYOD9.temp&lt;/li&gt;
+    &lt;/ul&gt;
+  &lt;/li&gt;
+  &lt;li&gt;The PowerShell &lt;a href=&quot;https://msdn.microsoft.com/en-us/powershell/reference/5.0/microsoft.powershell.core/providers/alias-provider&quot;&gt;FileSystem Provider Class&lt;/a&gt; is started with the HostApplication being PowerShell and HostName of ConsoleHost within the PowerShell Event Logs.&lt;/li&gt;
+  &lt;li&gt;The PowerShell &lt;a href=&quot;https://msdn.microsoft.com/en-us/powershell/reference/5.0/microsoft.powershell.core/providers/environment-provider&quot;&gt;Environment Provider Class&lt;/a&gt; is started with the HostApplication being PowerShell and HostName of ConsoleHost within the PowerShell Event Logs.&lt;/li&gt;
+  &lt;li&gt;The PowerShell &lt;a href=&quot;https://msdn.microsoft.com/en-us/powershell/reference/5.0/microsoft.powershell.core/providers/function-provider&quot;&gt;Function Provider Class&lt;/a&gt; is started with the HostApplication being PowerShell and HostName of ConsoleHost within the PowerShell Event Logs.&lt;/li&gt;
+  &lt;li&gt;You see within the PowerShell Event Logs that the PowerShell EngineState is changed from None to Available. The HostApplication still set to PowerShell and HostName to ConsoleHost.
+    &lt;ul&gt;
+      &lt;li&gt;NewEngineState=Available&lt;br /&gt;
+PreviousEngineState=None&lt;br /&gt;
+SequenceNumber=13&lt;br /&gt;
+HostName=ConsoleHost&lt;br /&gt;
+HostVersion=5.0.10240.17146&lt;br /&gt;
+HostId=53a3334d-c0bf-4209-b9cd-acbe0a334542&lt;br /&gt;
+HostApplication=powershell&lt;br /&gt;
+EngineVersion=5.0.10240.17146&lt;br /&gt;
+RunspaceId=03909b1a-0fdf-4734-a28f-9c27b7f2f9cb&lt;br /&gt;
+PipelineId=&lt;br /&gt;
+CommandName=&lt;br /&gt;
+CommandType=&lt;br /&gt;
+ScriptName=&lt;br /&gt;
+CommandPath=&lt;br /&gt;
+CommandLine=&lt;/li&gt;
+    &lt;/ul&gt;
+  &lt;/li&gt;
+  &lt;li&gt;The PowerShell &lt;a href=&quot;https://msdn.microsoft.com/en-us/powershell/reference/5.0/microsoft.powershell.core/providers/variable-provider&quot;&gt;Variable Provider Class&lt;/a&gt; is started with the HostApplication being PowerShell and HostName of ConsoleHost within the PowerShell Event Logs.&lt;/li&gt;
+  &lt;li&gt;PowerShell starts an IPC listening thread from the PowerShell PID.  “Windows PowerShell has started an IPC listening thread on process: 3372 in AppDomain: DefaultAppDomain.”  OpCode of Open(async)&lt;/li&gt;
+  &lt;li&gt;At this point the PowerShell console logs itself as starting.  “PowerShell console is starting up”&lt;/li&gt;
+  &lt;li&gt;The PowerShell console logs itself as ready for user input&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;&lt;img src=&quot;http://localhost:4000/images/PowerShell-startup.png&quot; alt=&quot;PowerShell Startup Image&quot; /&gt;&lt;/p&gt;
+
+&lt;h2 id=&quot;mmc20application-com-object-remote-execution&quot;&gt;MMC20.Application COM Object Remote Execution&lt;/h2&gt;
+
+&lt;p&gt;To get to the meat and potatoes of post, what artifacts and events could an analyst be aware of when they are keeping an eye out for suspicious or malicious activity on a host or across an enterprise.&lt;br /&gt;&lt;/p&gt;
+
+&lt;p&gt;&lt;strong&gt;On the Domain Controller, we see the following:&lt;/strong&gt;&lt;/p&gt;
+&lt;ul&gt;
+  &lt;li&gt;At 22:06:15.251, it receives an attempt to validate credentials for an account:
+    &lt;ul&gt;
+      &lt;li&gt;An AUDIT_SUCCESS with an EventID of 4776 from the Windows 10 endpoint&lt;br /&gt;
+Authentication Package:	MICROSOFT_AUTHENTICATION_PACKAGE_V1_0&lt;br /&gt;
+Logon Account:	Administrator&lt;br /&gt;
+Source Workstation:	BALUUR&lt;br /&gt;
+Error Code:	0x0&lt;/li&gt;
+    &lt;/ul&gt;
+  &lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;&lt;strong&gt;On the Windows 10 host, we the following:&lt;/strong&gt;&lt;/p&gt;
+&lt;ul&gt;
+  &lt;li&gt;The PowerShell Event Logs record:
+    &lt;ul&gt;
+      &lt;li&gt;Category: “Execute a Remote Command” &lt;em&gt;This category entry is definitely noteworthy and worthy of event recording&lt;/em&gt;&lt;/li&gt;
+      &lt;li&gt;A Message containing: &lt;br /&gt;
+        &lt;ul&gt;
+          &lt;li&gt;Creating Scriptblock text (1 of 1):&lt;br /&gt;
+$comobj = [Activator]::CreateInstance([Type]::GetTypeFromProgID(“MMC20.Application”,”172.20.64.130”));&lt;br /&gt;
+ScriptBlock ID: 684e0b39-d5ad-498c-a64a-5b029b23fafe&lt;br /&gt;
+Path:&lt;/li&gt;
+        &lt;/ul&gt;
+      &lt;/li&gt;
+    &lt;/ul&gt;
+  &lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;&lt;img src=&quot;http://localhost:4000/images/MMC20-Application.png&quot; alt=&quot;MMC20.Application Image&quot; /&gt;&lt;/p&gt;
+
+&lt;p&gt;&lt;strong&gt;On the Windows 7 target, we see the following:&lt;/strong&gt;&lt;/p&gt;
+&lt;ul&gt;
+  &lt;li&gt;At 22:06:15.550 there is a Special Logon in the Security Event Logs&lt;/li&gt;
+  &lt;li&gt;An AUDIT_SUCCESS event with an EventID of 4672 from the DC as the Source IP&lt;/li&gt;
+  &lt;li&gt;Message containing:&lt;br /&gt;
+    &lt;ul&gt;
+      &lt;li&gt;Special privileges assigned to new logon.&lt;br /&gt;
+Subject:&lt;br /&gt;
+Security ID:		S-1-5-21-1923566281-4131265335-1104240599-500&lt;br /&gt;
+Account Name:		Administrator&lt;br /&gt;
+Account Domain:		THENEGATIVE&lt;br /&gt;
+Logon ID:		0xa0292&lt;br /&gt;
+Privileges:		SeSecurityPrivilege&lt;br /&gt;
+        SeBackupPrivilege&lt;br /&gt;
+        SeRestorePrivilege&lt;br /&gt;
+        SeTakeOwnershipPrivilege&lt;br /&gt;
+        SeDebugPrivilege&lt;br /&gt;
+        SeSystemEnvironmentPrivilege&lt;br /&gt;
+        SeLoadDriverPrivilege&lt;br /&gt;
+        SeImpersonatePrivilege&lt;/li&gt;
+    &lt;/ul&gt;
+  &lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;&lt;br /&gt;
+Then at 22:06:15.555, we then see another Special Logon in the Security Event Logs that shows the same exact thing but a different Logon ID:  &lt;em&gt;The Logon ID is a semi-unique (unique between reboots) number that identifies the logon session just initiated.  Any events logged subsequently during this logon session will report the same Logon ID through to the logoff event 4647 or 4634.&lt;/em&gt;&lt;/p&gt;
+&lt;ul&gt;
+  &lt;li&gt;An AUDIT_SUCCESS event with an EventID of 4672 from the DC as the Source IP&lt;/li&gt;
+  &lt;li&gt;Message containing:&lt;br /&gt;
+    &lt;ul&gt;
+      &lt;li&gt;Special privileges assigned to new logon.&lt;br /&gt;
+Subject:&lt;br /&gt;
+Security ID:		S-1-5-21-1923566281-4131265335-1104240599-500&lt;br /&gt;
+Account Name:		Administrator&lt;br /&gt;
+Account Domain:		THENEGATIVE&lt;br /&gt;
+Logon ID:		0xa0294&lt;br /&gt;
+Privileges:		SeSecurityPrivilege&lt;br /&gt;
+        SeBackupPrivilege&lt;br /&gt;
+        SeRestorePrivilege&lt;br /&gt;
+        SeTakeOwnershipPrivilege&lt;br /&gt;
+        SeDebugPrivilege&lt;br /&gt;
+        SeSystemEnvironmentPrivilege&lt;br /&gt;
+        SeLoadDriverPrivilege&lt;br /&gt;
+        SeImpersonatePrivilege&lt;/li&gt;
+    &lt;/ul&gt;
+  &lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;&lt;br /&gt;
+We then finally see the successful login from the Windows 10 host on the Windows 7 host at 22:06:15.555:&lt;/p&gt;
+&lt;ul&gt;
+  &lt;li&gt;An AUDIT_SUCCESS event with an EventID of 4624 with NTLM Authentication&lt;/li&gt;
+  &lt;li&gt;LogonProcessName of NTLMSSP.  &lt;em&gt;Since this was a Windows 7 box it defaulted to NTLM / NTLMSSP.  If it was Vista or higher it would show Kerberos&lt;/em&gt;&lt;/li&gt;
+  &lt;li&gt;LogonType 3 (Network)&lt;/li&gt;
+  &lt;li&gt;A Message containing:
+    &lt;ul&gt;
+      &lt;li&gt;An account was successfully logged on.&lt;br /&gt;
+Subject:&lt;br /&gt;
+Security ID:		S-1-0-0\ &lt;em&gt;Null/Nobody SID&lt;/em&gt;
+Account Name:		-&lt;br /&gt;
+Account Domain:		-&lt;br /&gt;
+Logon ID:		0x0&lt;br /&gt;
+Logon Type:			3&lt;br /&gt;
+New Logon:&lt;br /&gt;
+Security ID:		S-1-5-21-1923566281-4131265335-1104240599-500&lt;br /&gt;
+Account Name:		Administrator&lt;br /&gt;
+Account Domain:		THENEGATIVE&lt;br /&gt;
+Logon ID:		0xa0294&lt;br /&gt;
+Logon GUID:		{00000000-0000-0000-0000-000000000000}&lt;br /&gt;
+Process Information:&lt;br /&gt;
+Process ID:		0x0&lt;br /&gt;
+Process Name:		-&lt;br /&gt;
+Network Information:&lt;br /&gt;
+Workstation Name:	BALUUR&lt;br /&gt;
+Source Network Address:	172.20.64.135&lt;br /&gt;
+Source Port:		49461&lt;br /&gt;
+Detailed Authentication Information:&lt;br /&gt;
+Logon Process:		NtLmSsp &lt;br /&gt;
+Authentication Package:	NTLM&lt;br /&gt;
+Transited Services:	-&lt;br /&gt;
+Package Name (NTLM only):	NTLM V2&lt;br /&gt;
+Key Length:		128&lt;/li&gt;
+    &lt;/ul&gt;
+  &lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;&lt;strong&gt;On the Windows 10 host at 22:06:16.422, we four network events:&lt;/strong&gt;
+Microsoft’s DCE RPC Locator Service/epmap initiates a TCP connection on behalf of the DCOM object to the Windows 7 host:&lt;/p&gt;
+&lt;ul&gt;
+  &lt;li&gt;Event Record from Sysmon states: Network connection detected&lt;/li&gt;
+  &lt;li&gt;Process: C:\Windows\System32\svchost.exe&lt;/li&gt;
+  &lt;li&gt;Protocol: TCP&lt;/li&gt;
+  &lt;li&gt;Destination Port: 135&lt;/li&gt;
+  &lt;li&gt;Destination IP: 172.20.64.130&lt;/li&gt;
+  &lt;li&gt;Destination Hostname: Arthros&lt;/li&gt;
+  &lt;li&gt;User: NT AUTHORITY\NETWORK SERVICE&lt;/li&gt;
+  &lt;li&gt;Source Port: 49460&lt;/li&gt;
+  &lt;li&gt;Source Hostname: Baluur.thenegative.zone&lt;/li&gt;
+  &lt;li&gt;Source IP: 172.20.64.135&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;&lt;br /&gt;
+We then see a second epmap DCOM connection initiated at 22:06:16.426:&lt;br /&gt;
+&lt;em&gt;Currently, I am unsure why there are two paired connects instead of one epmap and then one powershell.  It needs further vetting but it may be due to the two COMObj calls, followed subsequently by two PowerShell calls.  Nonetheless, if investigating this activity or you see similar activity you would see an svchost NetworkConnect followed by a PowerShell NetworkConnect&lt;/em&gt;&lt;/p&gt;
+&lt;ul&gt;
+  &lt;li&gt;Event Record from Sysmon states: Network connection detected&lt;/li&gt;
+  &lt;li&gt;Process: C:\Windows\System32\svchost.exe&lt;/li&gt;
+  &lt;li&gt;Protocol: TCP&lt;/li&gt;
+  &lt;li&gt;Destination Port: 135&lt;/li&gt;
+  &lt;li&gt;Destination IP: 172.20.64.130&lt;/li&gt;
+  &lt;li&gt;Destination Hostname: Arthros&lt;/li&gt;
+  &lt;li&gt;User: NT AUTHORITY\NETWORK SERVICE&lt;/li&gt;
+  &lt;li&gt;Source Port: 49461&lt;/li&gt;
+  &lt;li&gt;Source Hostname: Baluur.thenegative.zone&lt;/li&gt;
+  &lt;li&gt;Source IP: 172.20.64.135&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;&lt;br /&gt;
+We then see PowerShell initiate a connection at 22:06:16.428:&lt;/p&gt;
+&lt;ul&gt;
+  &lt;li&gt;Event Record from Sysmon states: Network connection detected&lt;/li&gt;
+  &lt;li&gt;Process: C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe&lt;/li&gt;
+  &lt;li&gt;ProcessId: 3372&lt;/li&gt;
+  &lt;li&gt;Protocol: TCP&lt;/li&gt;
+  &lt;li&gt;Destination Port: 49189&lt;/li&gt;
+  &lt;li&gt;Destination IP: 172.20.64.130&lt;/li&gt;
+  &lt;li&gt;Destination Hostname: Arthros&lt;/li&gt;
+  &lt;li&gt;User: THENEGATIVE\Administrator&lt;/li&gt;
+  &lt;li&gt;Source Port: 49462&lt;/li&gt;
+  &lt;li&gt;Source Hostname: Baluur.thenegative.zone&lt;/li&gt;
+  &lt;li&gt;Source IP: 172.20.64.135&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;&lt;br /&gt;
+We then see PowerShell initiate another connection at 22:06:16.432:&lt;/p&gt;
+&lt;ul&gt;
+  &lt;li&gt;Event Record from Sysmon states: Network connection detected&lt;/li&gt;
+  &lt;li&gt;Process: C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe&lt;/li&gt;
+  &lt;li&gt;ProcessId: 3372&lt;/li&gt;
+  &lt;li&gt;Protocol: TCP&lt;/li&gt;
+  &lt;li&gt;Destination Port: 49189&lt;/li&gt;
+  &lt;li&gt;Destination IP: 172.20.64.130&lt;/li&gt;
+  &lt;li&gt;Destination Hostname: Arthros&lt;/li&gt;
+  &lt;li&gt;User: THENEGATIVE\Administrator&lt;/li&gt;
+  &lt;li&gt;Source Port: 49463&lt;/li&gt;
+  &lt;li&gt;Source Hostname: Baluur.thenegative.zone&lt;/li&gt;
+  &lt;li&gt;Source IP: 172.20.64.135&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;&lt;strong&gt;On the Windows 7 endpoint at 22:06:16.577:&lt;/strong&gt;
+We finally see the COM Object Process Create event spawn:&lt;/p&gt;
+&lt;ul&gt;
+  &lt;li&gt;Process: C:\Windows\System32\mmc.exe -Embedding&lt;/li&gt;
+  &lt;li&gt;ProcessId: 1312&lt;/li&gt;
+  &lt;li&gt;ThreadID: 1496&lt;/li&gt;
+  &lt;li&gt;ParentProcess: C:\Windows\system32\svchost.exe -k DcomLaunch&lt;/li&gt;
+  &lt;li&gt;ParentProcessId: 584&lt;/li&gt;
+  &lt;li&gt;User: THENEGATIVE\Administrator&lt;/li&gt;
+  &lt;li&gt;LogonId: 0xa0292&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;&lt;br /&gt;
+We then see the first epmap network connections from the Windows 10 host at 22:06:16.578:&lt;/p&gt;
+&lt;ul&gt;
+  &lt;li&gt;Event Record from Sysmon states: Network connection detected&lt;/li&gt;
+  &lt;li&gt;Process: C:\Windows\System32\svchost.exe&lt;/li&gt;
+  &lt;li&gt;ProcessId: 680&lt;/li&gt;
+  &lt;li&gt;Protocol: TCP&lt;/li&gt;
+  &lt;li&gt;User: NT AUTHORITY\NETWORK SERVICE&lt;/li&gt;
+  &lt;li&gt;Source Port: 135&lt;/li&gt;
+  &lt;li&gt;Source Hostname: Arthros&lt;/li&gt;
+  &lt;li&gt;Source IP: 172.20.64.130&lt;/li&gt;
+  &lt;li&gt;Destination IP: 172.20.64.135&lt;/li&gt;
+  &lt;li&gt;Destination Hostname: Baluur&lt;/li&gt;
+  &lt;li&gt;Destination Port: 49460&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;&lt;br /&gt;
+Then the second epmap connection at 22:06:16.579:&lt;/p&gt;
+&lt;ul&gt;
+  &lt;li&gt;Event Record from Sysmon states: Network connection detected&lt;/li&gt;
+  &lt;li&gt;Process: C:\Windows\System32\svchost.exe&lt;/li&gt;
+  &lt;li&gt;ProcessId: 680&lt;/li&gt;
+  &lt;li&gt;Protocol: TCP&lt;/li&gt;
+  &lt;li&gt;User: NT AUTHORITY\NETWORK SERVICE&lt;/li&gt;
+  &lt;li&gt;Source Port: 135&lt;/li&gt;
+  &lt;li&gt;Source Hostname: Arthros&lt;/li&gt;
+  &lt;li&gt;Source IP: 172.20.64.130&lt;/li&gt;
+  &lt;li&gt;Destination IP: 172.20.64.135&lt;/li&gt;
+  &lt;li&gt;Destination Hostname: Baluur&lt;/li&gt;
+  &lt;li&gt;Destination Port: 49461&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;&lt;br /&gt;
+We then see the first MMC connection from PowerShell at 22:06:16.580:&lt;/p&gt;
+&lt;ul&gt;
+  &lt;li&gt;Event Record from Sysmon states: Network connection detected&lt;/li&gt;
+  &lt;li&gt;Process: C:\Windows\System32\mmc.exe&lt;/li&gt;
+  &lt;li&gt;ProcessId: 196&lt;/li&gt;
+  &lt;li&gt;Protocol: TCP&lt;/li&gt;
+  &lt;li&gt;User: THENEGATIVE\Administrator&lt;/li&gt;
+  &lt;li&gt;Source Port: 49189&lt;/li&gt;
+  &lt;li&gt;Source Hostname: Arthros&lt;/li&gt;
+  &lt;li&gt;Source IP: 172.20.64.130&lt;/li&gt;
+  &lt;li&gt;Destination IP: 172.20.64.135&lt;/li&gt;
+  &lt;li&gt;Destination Hostname: Baluur&lt;/li&gt;
+  &lt;li&gt;Destination Port: 49462&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;&lt;br /&gt;
+We then see the second MMC connection from PowerShell at 22:06:16.581:&lt;/p&gt;
+&lt;ul&gt;
+  &lt;li&gt;Event Record from Sysmon states: Network connection detected&lt;/li&gt;
+  &lt;li&gt;Process: C:\Windows\System32\mmc.exe&lt;/li&gt;
+  &lt;li&gt;ProcessId: 196&lt;/li&gt;
+  &lt;li&gt;Protocol: TCP&lt;/li&gt;
+  &lt;li&gt;User: THENEGATIVE\Administrator&lt;/li&gt;
+  &lt;li&gt;Source Port: 49189&lt;/li&gt;
+  &lt;li&gt;Source Hostname: Arthros&lt;/li&gt;
+  &lt;li&gt;Source IP: 172.20.64.130&lt;/li&gt;
+  &lt;li&gt;Destination IP: 172.20.64.135&lt;/li&gt;
+  &lt;li&gt;Destination Hostname: Baluur&lt;/li&gt;
+  &lt;li&gt;Destination Port: 49463
+&lt;img src=&quot;http://localhost:4000/images/MMC-NetworkConnect.png&quot; alt=&quot;MMC NetworkConnect Image&quot; /&gt;&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;&lt;br /&gt;
+Low and behold, we finally see Calc spawn at 22:06:30.771:&lt;/p&gt;
+&lt;ul&gt;
+  &lt;li&gt;Process: C:\Windows\System32\calc.exe&lt;/li&gt;
+  &lt;li&gt;ProcessId: 3728&lt;/li&gt;
+  &lt;li&gt;ThreadID: 1496&lt;/li&gt;
+  &lt;li&gt;ParentProcess: C:\Windows\system32\mmc.exe -Embedding&lt;/li&gt;
+  &lt;li&gt;ParentProcessId: 196&lt;/li&gt;
+  &lt;li&gt;User: THENEGATIVE\Administrator&lt;/li&gt;
+  &lt;li&gt;LogonId: 0xa0292
+&lt;img src=&quot;http://localhost:4000/images/evil-calc.png&quot; alt=&quot;Evil Calc Image&quot; /&gt;&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;&lt;br /&gt;
+Clearly this type of movement can be hard to spot and it blends in with the normal noise but there are some indicators to recognize.  Of course, this is dependent on how deeply you log/audit or how much visibility you may have in some other form or fashion.  If you utilize SysMon or a similar product, it can definitely help recognize tactics like unauthorized PowerShell executions, MMC remote executions along with their network attributes, recognizing processes with their ParentProcess being MCC and of course any use of calc.exe is clearly pure evil.&lt;/p&gt;
+</description>
+        <pubDate>Sat, 04 Feb 2017 00:00:00 -0500</pubDate>
+        <link>http://localhost:4000/incident%20response/2017/02/04/MMC20.Application-Lateral-Movement-Analysis.html</link>
+        <guid isPermaLink="true">http://localhost:4000/incident%20response/2017/02/04/MMC20.Application-Lateral-Movement-Analysis.html</guid>
+        
+        <category>incident response</category>
+        
+        <category>lateral movement</category>
+        
+        
+        <category>incident response</category>
+        
+      </item>
+    
+  </channel>
+</rss>
