@@ -11,7 +11,7 @@ comments: true
 mathjax:
 ---
 
-Continuing my analysis of lateral movement using MMC20.Application (see my [previous post](http://thenegative.zone/blog/MMC20.Application-Lateral-Movement-Analysis 'Analyzing MMC20.Application Lateral Movement')), the next logical course was to look in memory and see what I can find.  This post will cover my memory findings.  I will note that I performed this MMC20.Application abuse and then waited a little while before actually capturing memory.
+Continuing my analysis of lateral movement using MMC20.Application (see my [previous post](http://thenegative.zone/incident%20response/2017/02/04/MMC20.Application-Lateral-Movement-Analysis.html 'Analyzing MMC20.Application Lateral Movement')), the next logical course was to look in memory and see what I can find.  This post will cover my memory findings.  I will note that I performed this MMC20.Application abuse and then waited a little while before actually capturing memory.
 
 Process Listing Reviews
 ----------------------------------------
